@@ -127,7 +127,7 @@ The first user task message is the default goal. The optional launcher in §5.11
 The parser reads only complete newline-terminated JSON records. Its cursor includes file identity, byte position, and a bounded replay checkpoint:
 
 ```text
-<device>:<inode>:<byte-offset>:<checkpoint-hash>
+<device>:<inode>:<byte-offset>:<record-ordinal>:<checkpoint-hash>
 ```
 
 This ingest cursor is internal. It is persisted in `event_cursors` and never leaves the process: device and inode numbers are host details, they change under the rotation and copy-truncate cases this section already handles, and a client holding one would be broken by any of them.
@@ -136,18 +136,27 @@ Everything outside the tailer uses a separate **event sequence**: a monotonic pe
 
 Three identifiers are distinct, and conflating them breaks replay:
 
-- **Logical event ID** — the identity of a record, derived only from content: `hash(session_id, kind, payload_hash, occurrence_index)`, where `occurrence_index` counts prior records in the session with the same `kind` and `payload_hash` and so disambiguates genuinely identical repeats. It contains no byte offset, no inode, and no file position.
+- **Logical event ID** — `hash(session_id, record_ordinal, kind, payload_hash)`, where `record_ordinal` is the record's absolute zero-based position from the **start of the session file**. It contains no byte offset, no inode, and no device number, so relocation of the same record to a different offset does not change it.
 - **Source locator** — device, inode, byte offset, and record length. Stored alongside the event as provenance for auditing, never as part of its identity.
 - **Event sequence** — assigned transactionally at first successful insert of a logical event ID, under a unique constraint on that ID. A replayed record collides with the existing row, is ignored, and keeps its original sequence.
 
-Deriving the ID from a byte offset, as an earlier draft did, contradicts the replay and copy-truncate recovery this same section requires: the identical logical record relocated to a different offset would hash differently, so it would be inserted a second time, receive a new sequence, and change the provenance already cited by delivered notifications. Content addressing makes deduplication after replay work by construction rather than by luck.
+An earlier draft derived the ordinal from *prior identical records* and called the result content-addressed. That was wrong in both directions, and the recovery contract below is narrowed accordingly rather than the claim being restated. If two identical records exist and recovery starts after the first, the survivor recounts to ordinal 0 and adopts the first record's identity; if the count instead continues from the stored total, a replayed record takes the next ordinal and is inserted twice. A relative ordinal cannot survive a replay whose starting point varies, so it cannot carry identity.
+
+The absolute ordinal works only under an explicit precondition, and Watchtower enforces it rather than assuming it:
+
+- **Rollouts are append-only.** Codex appends records and does not rewrite or remove earlier ones. Under append-only mutation, replaying from the file start or from any verified checkpoint reproduces the same absolute ordinal for every record, so identity is stable and deduplication is exact.
+- **The checkpoint carries the ordinal.** The cursor checkpoint stores the absolute record ordinal at the checkpoint boundary alongside its hash, so a resumed replay continues the count instead of recomputing it.
+- **Violations fail closed.** If the prefix hash no longer matches at the checkpoint — a rewritten, reordered, or prefix-truncated file — the append-only precondition is broken and ordinals are no longer comparable. Watchtower does **not** silently re-identify events. It marks the session `identity_broken`, stops ingesting it, emits a critical `dependency_unavailable` signal naming the file, and preserves existing events and their sequences. Recovery is an operator action.
+
+Watchtower does not claim identity for records that a non-append-only mutation has already displaced. It guarantees exact deduplication for append-only rollouts, which is what Codex produces, and detects rather than papers over anything else. No upstream per-record identifier exists in Codex 0.133.0 rollout records that could provide a stronger guarantee; if a future version adds one, it supersedes the ordinal.
 
 Requirements:
 
 - never process a partial final line;
 - detect truncation, inode replacement/reuse, copy-truncate, and prefix mismatch;
 - deduplicate after restart using the logical event ID;
-- on any identity/checkpoint mismatch, replay from the last verified newline checkpoint (or file start) and rely on content-addressed logical event IDs for deduplication;
+- on an identity mismatch that preserves the verified prefix, replay from the last verified newline checkpoint (or file start), continuing the absolute record ordinal, and deduplicate by logical event ID;
+- on a prefix-hash mismatch, treat the append-only precondition as violated: stop ingesting the session, mark it `identity_broken`, and never re-identify existing events;
 - preserve only redacted, bounded unknown-event summaries in SQLite; retain source hashes and byte lengths, not raw payloads;
 - redact before persistence, cap individual command output before normalization, and retain its hash and original byte length;
 - open only regular files owned by the configured user under the resolved sessions root; reject symlink escape, FIFO/device files, and files exceeding configured size limits.

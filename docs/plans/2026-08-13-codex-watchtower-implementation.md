@@ -212,11 +212,12 @@
 2. Complete the line and assert exactly one event appears.
 3. Test restart from a stored byte cursor.
 4. Test inode replacement, truncation, inode reuse, copy-truncate, fast regrowth beyond the old offset, prefix mismatch, and migration between devices.
-5. On mismatch, replay from the last verified newline checkpoint or file start and deduplicate by stable event ID.
-6. Reject symlinks escaping the root, non-regular files, wrong-owner files, FIFO/devices, and configured oversize limits; verify identity again after open.
-7. Implement the internal cursor `<device>:<inode>:<offset>:<checkpoint-hash>` and assert it is never returned by any API route or embedded in an observation, assessment, or notification.
-8. Assign the monotonic per-session event sequence transactionally at first insert, under a unique constraint on the logical event ID; test that a replayed record collides, is ignored, and keeps its original sequence, so notification provenance never changes retroactively.
-9. Commit: `feat: tail codex rollouts incrementally`.
+5. On a prefix-preserving mismatch, replay from the last verified newline checkpoint or file start, continue the absolute record ordinal, and deduplicate by logical event ID.
+6. Test the append-only precondition directly: a prefix-hash mismatch stops ingestion for that session, marks it `identity_broken`, emits a critical `dependency_unavailable` signal naming the file, preserves existing events and their sequences, and re-identifies nothing.
+7. Reject symlinks escaping the root, non-regular files, wrong-owner files, FIFO/devices, and configured oversize limits; verify identity again after open.
+8. Implement the internal cursor `<device>:<inode>:<offset>:<record-ordinal>:<checkpoint-hash>`, carrying the absolute ordinal so a resumed replay continues the count rather than recomputing it, and assert the cursor is never returned by any API route or embedded in an observation, assessment, or notification.
+9. Assign the monotonic per-session event sequence transactionally at first insert, under a unique constraint on the logical event ID; test that a replayed record collides, is ignored, and keeps its original sequence, so notification provenance never changes retroactively.
+10. Commit: `feat: tail codex rollouts incrementally`.
 
 ### Task 8: Normalize known and unknown Codex events
 
@@ -232,11 +233,12 @@
 
 1. Add fixtures for session lifecycle, messages, commands, command output, patches, token updates, errors, and unknown event types.
 2. Write expected normalized snapshots.
-3. Implement content-addressed logical event IDs from session ID, kind, payload hash, and an occurrence index disambiguating identical repeats. Store device/inode/offset only as a source locator. Test that relocating a record to a different offset, as copy-truncate and replay do, yields the same ID and no duplicate row.
-4. Redact before persistence, bound command output, and retain only redacted summary plus source hash/original byte length.
-5. Ensure unknown events become `kind=unknown` with source type preserved.
-6. Test that turn boundaries normalize to `turn_lifecycle` and process boundaries to `process_lifecycle`, and that no single `lifecycle` kind is emitted.
-7. Commit: `feat: normalize codex rollout events`.
+3. Implement logical event IDs from session ID, absolute record ordinal, kind, and payload hash. Store device/inode/offset only as a source locator. Test that relocating a record to a different offset, as copy-truncate and replay do, yields the same ID and no duplicate row.
+4. Regression-test both failure modes of the relative ordinal this replaces: two identical records where recovery starts after the first must not give the survivor the first record's ID, and a count continued from a stored total must not insert a replayed record twice. Both must hold for replay from the file start and from a checkpoint.
+5. Redact before persistence, bound command output, and retain only redacted summary plus source hash/original byte length.
+6. Ensure unknown events become `kind=unknown` with source type preserved.
+7. Test that turn boundaries normalize to `turn_lifecycle` and process boundaries to `process_lifecycle`, and that no single `lifecycle` kind is emitted.
+8. Commit: `feat: normalize codex rollout events`.
 
 ### Task 9: Classify lifecycle without model inference
 
