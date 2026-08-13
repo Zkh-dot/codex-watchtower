@@ -60,10 +60,11 @@
 
 1. Resolve deployment-specific Luna/Terra identifiers and structured-output support.
 2. Verify keyword support explicitly rather than structured-output support in general: submit `schemas/assessment.schema.json` unmodified, record which of `const`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `minItems`, `maxItems`, `uniqueItems`, `oneOf`, and external `$ref` are rejected, then confirm `schemas/assessment.wire.schema.json` is accepted. Discovering this in Phase 6 instead forces a schema rewrite mid-cascade.
-3. Smoke one schema-valid request per profile after explicit operator approval.
-4. Verify HTTPS certificate validation, redirect rejection, endpoint allowlisting, disabled proxy inheritance, response-size cap, retry budget, and provider retention/logging policy.
-5. Record latency and cost without storing prompts or credentials.
-6. Commit: `spike: verify assessment model contracts`.
+3. Record the result as a capability matrix keyed by provider, model, and API version in `spikes/models/README.md`. The wire schema is conservative pending this matrix; do not assert that a specific keyword is unsupported anywhere until measured here.
+4. Smoke one schema-valid request per profile after explicit operator approval.
+5. Verify HTTPS certificate validation, redirect rejection, endpoint allowlisting, disabled proxy inheritance, response-size cap, retry budget, and provider retention/logging policy.
+6. Record latency and cost without storing prompts or credentials.
+7. Commit: `spike: verify assessment model contracts`.
 
 ## Phase 0: Repository and quality gates
 
@@ -155,7 +156,7 @@
 
 1. Write tests for migration idempotence and WAL mode.
 2. Test atomic insertion of an already-redacted event and cursor update; raw rollout payloads must never enter SQLite.
-3. Test event deduplication by stable event ID.
+3. Test event deduplication by logical event ID, including concurrent inserts of the same ID, and that the event sequence is assigned exactly once per logical event.
 4. Test latest-assessment and pending-delivery queries.
 5. Implement the minimal repository using the standard `sqlite3` module and explicit transactions.
 6. Run repository tests twice against the same temporary database.
@@ -214,7 +215,7 @@
 5. On mismatch, replay from the last verified newline checkpoint or file start and deduplicate by stable event ID.
 6. Reject symlinks escaping the root, non-regular files, wrong-owner files, FIFO/devices, and configured oversize limits; verify identity again after open.
 7. Implement the internal cursor `<device>:<inode>:<offset>:<checkpoint-hash>` and assert it is never returned by any API route or embedded in an observation, assessment, or notification.
-8. Assign the monotonic per-session event sequence used by the API, observation windows, and assessments; test that it survives restart, rotation, and replay unchanged.
+8. Assign the monotonic per-session event sequence transactionally at first insert, under a unique constraint on the logical event ID; test that a replayed record collides, is ignored, and keeps its original sequence, so notification provenance never changes retroactively.
 9. Commit: `feat: tail codex rollouts incrementally`.
 
 ### Task 8: Normalize known and unknown Codex events
@@ -231,7 +232,7 @@
 
 1. Add fixtures for session lifecycle, messages, commands, command output, patches, token updates, errors, and unknown event types.
 2. Write expected normalized snapshots.
-3. Implement stable event ID generation from session ID, source offset, type, and payload hash.
+3. Implement content-addressed logical event IDs from session ID, kind, payload hash, and an occurrence index disambiguating identical repeats. Store device/inode/offset only as a source locator. Test that relocating a record to a different offset, as copy-truncate and replay do, yields the same ID and no duplicate row.
 4. Redact before persistence, bound command output, and retain only redacted summary plus source hash/original byte length.
 5. Ensure unknown events become `kind=unknown` with source type preserved.
 6. Test that turn boundaries normalize to `turn_lifecycle` and process boundaries to `process_lifecycle`, and that no single `lifecycle` kind is emitted.

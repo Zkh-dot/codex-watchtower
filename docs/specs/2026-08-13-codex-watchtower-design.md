@@ -132,14 +132,22 @@ The parser reads only complete newline-terminated JSON records. Its cursor inclu
 
 This ingest cursor is internal. It is persisted in `event_cursors` and never leaves the process: device and inode numbers are host details, they change under the rotation and copy-truncate cases this section already handles, and a client holding one would be broken by any of them.
 
-Everything outside the tailer uses a separate **event sequence**: a monotonic per-session integer assigned at normalization and stored with each event. The API `after=` parameter, the observation window `from_cursor`/`to_cursor`, the assessment `event_cursor`, and notification provenance all carry the event sequence. It is stable across restarts, rotation, and replay, because it is derived from the stable event ID ordering rather than from file layout.
+Everything outside the tailer uses a separate **event sequence**: a monotonic per-session integer. The API `after=` parameter, the observation window `from_cursor`/`to_cursor`, the assessment `event_cursor`, and notification provenance all carry the event sequence.
+
+Three identifiers are distinct, and conflating them breaks replay:
+
+- **Logical event ID** — the identity of a record, derived only from content: `hash(session_id, kind, payload_hash, occurrence_index)`, where `occurrence_index` counts prior records in the session with the same `kind` and `payload_hash` and so disambiguates genuinely identical repeats. It contains no byte offset, no inode, and no file position.
+- **Source locator** — device, inode, byte offset, and record length. Stored alongside the event as provenance for auditing, never as part of its identity.
+- **Event sequence** — assigned transactionally at first successful insert of a logical event ID, under a unique constraint on that ID. A replayed record collides with the existing row, is ignored, and keeps its original sequence.
+
+Deriving the ID from a byte offset, as an earlier draft did, contradicts the replay and copy-truncate recovery this same section requires: the identical logical record relocated to a different offset would hash differently, so it would be inserted a second time, receive a new sequence, and change the provenance already cited by delivered notifications. Content addressing makes deduplication after replay work by construction rather than by luck.
 
 Requirements:
 
 - never process a partial final line;
 - detect truncation, inode replacement/reuse, copy-truncate, and prefix mismatch;
-- deduplicate after restart using the event hash;
-- on any identity/checkpoint mismatch, replay from the last verified newline checkpoint (or file start) and rely on stable event IDs for deduplication;
+- deduplicate after restart using the logical event ID;
+- on any identity/checkpoint mismatch, replay from the last verified newline checkpoint (or file start) and rely on content-addressed logical event IDs for deduplication;
 - preserve only redacted, bounded unknown-event summaries in SQLite; retain source hashes and byte lengths, not raw payloads;
 - redact before persistence, cap individual command output before normalization, and retain its hash and original byte length;
 - open only regular files owned by the configured user under the resolved sessions root; reject symlink escape, FIFO/device files, and files exceeding configured size limits.
@@ -264,7 +272,9 @@ Model spend is bounded independently of packet size. Configuration sets a per-se
 
 Both assessors return an assessment via structured output, using two schema artifacts:
 
-- `schemas/assessment.wire.schema.json` is sent to the provider. Strict structured-output modes reject `const`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `minItems`, `maxItems`, `uniqueItems`, `oneOf`, and external `$ref`, which covers most of the constraint surface of the authoritative schema. The wire projection drops those keywords, sets `additionalProperties: false`, lists every property in `required`, and carries the removed bounds as prose in `description` so the model still sees them.
+- `schemas/assessment.wire.schema.json` is sent to the provider. It is a deliberately conservative lowest-common-denominator projection: it omits `const`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `minItems`, `maxItems`, `uniqueItems`, `oneOf`, and external `$ref`, sets `additionalProperties: false`, lists every property in `required`, and carries the removed bounds as prose in `description` so the model still sees them.
+
+  Which of those keywords a given deployment actually rejects is not yet established; Task 0C exists to determine it and to record a capability matrix per provider, model, and version. Until that matrix exists, the projection assumes the narrowest plausible support rather than asserting a specific provider's behaviour. If the matrix later shows a deployment accepts more, the projection can be relaxed for it; nothing in the design depends on the omissions being individually necessary.
 - `schemas/assessment.schema.json` remains authoritative. Every response is validated against it after parsing; a response that satisfies the wire schema but violates a bound is invalid and takes the retry path in §5.8.
 
 Nothing is relaxed by this split. The wire schema is a projection, not a second contract: CI regenerates it from the authoritative schema and fails when the two diverge in shape, enum membership, or nullability.
