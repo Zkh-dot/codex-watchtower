@@ -39,7 +39,10 @@ CREATE TABLE IF NOT EXISTS process_evidence (
     pid INTEGER,
     started_at TEXT,
     workspace TEXT NOT NULL,
-    session_id TEXT REFERENCES sessions (session_id),
+    -- Not a foreign key: the launcher may correlate to a session id before
+    -- discovery has created that session's row (they can run as separate
+    -- processes/times), so this must not be constrained to a pre-existing row.
+    session_id TEXT,
     correlation_method TEXT,
     goal TEXT,
     expected_paths TEXT NOT NULL DEFAULT '[]',

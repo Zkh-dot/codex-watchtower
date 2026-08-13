@@ -52,6 +52,23 @@ class DeliveryState:
     last_sent_at: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class ProcessEvidenceRecord:
+    launch_id: str
+    argv_hash: str
+    state: str  # "pending" | "running" | "exited"
+    pid: int | None
+    started_at: str | None
+    workspace: str
+    session_id: str | None
+    correlation_method: str | None
+    goal: str | None
+    expected_paths: list[str]
+    forbidden_paths: list[str]
+    exit_code: int | None
+    exited_at: str | None
+
+
 class Repository:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
@@ -439,3 +456,91 @@ class Repository:
         )
         assert cursor.lastrowid is not None
         return cursor.lastrowid
+
+    # --- process evidence (launcher, Task 9A) -------------------------
+
+    def create_process_evidence(
+        self,
+        launch_id: str,
+        *,
+        argv_hash: str,
+        workspace: str,
+        goal: str | None = None,
+        expected_paths: list[str] | None = None,
+        forbidden_paths: list[str] | None = None,
+    ) -> None:
+        """Create the record *before* spawn: state=pending, pid=null.
+
+        No PID can exist before spawn, so nothing may require one here.
+        """
+        self._conn.execute(
+            """
+            INSERT INTO process_evidence (
+                launch_id, argv_hash, state, workspace, goal, expected_paths, forbidden_paths
+            ) VALUES (?, ?, 'pending', ?, ?, ?, ?)
+            """,
+            (
+                launch_id,
+                argv_hash,
+                workspace,
+                goal,
+                json.dumps(expected_paths or []),
+                json.dumps(forbidden_paths or []),
+            ),
+        )
+
+    def mark_process_running(self, launch_id: str, *, pid: int, started_at: str) -> None:
+        self._conn.execute(
+            "UPDATE process_evidence SET state = 'running', pid = ?, started_at = ? "
+            "WHERE launch_id = ?",
+            (pid, started_at, launch_id),
+        )
+
+    def mark_process_exited(self, launch_id: str, *, exit_code: int, exited_at: str) -> None:
+        self._conn.execute(
+            "UPDATE process_evidence SET state = 'exited', exit_code = ?, exited_at = ? "
+            "WHERE launch_id = ?",
+            (exit_code, exited_at, launch_id),
+        )
+
+    def bind_process_session(
+        self, launch_id: str, *, session_id: str, correlation_method: str
+    ) -> None:
+        self._conn.execute(
+            "UPDATE process_evidence SET session_id = ?, correlation_method = ? "
+            "WHERE launch_id = ?",
+            (session_id, correlation_method, launch_id),
+        )
+
+    def get_process_evidence(self, launch_id: str) -> ProcessEvidenceRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM process_evidence WHERE launch_id = ?", (launch_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return _row_to_process_evidence(row)
+
+    def list_process_evidence_for_session(self, session_id: str) -> list[ProcessEvidenceRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM process_evidence WHERE session_id = ? ORDER BY created_at ASC",
+            (session_id,),
+        )
+        return [_row_to_process_evidence(row) for row in rows]
+
+
+def _row_to_process_evidence(row: sqlite3.Row) -> ProcessEvidenceRecord:
+    return ProcessEvidenceRecord(
+        launch_id=row["launch_id"],
+        argv_hash=row["argv_hash"],
+        state=row["state"],
+        pid=row["pid"],
+        started_at=row["started_at"],
+        workspace=row["workspace"],
+        session_id=row["session_id"],
+        correlation_method=row["correlation_method"],
+        goal=row["goal"],
+        expected_paths=json.loads(row["expected_paths"]),
+        forbidden_paths=json.loads(row["forbidden_paths"]),
+        exit_code=row["exit_code"],
+        exited_at=row["exited_at"],
+    )

@@ -69,9 +69,14 @@ def _extract_session_meta(record: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def _inspect(path: Path) -> DiscoveredSession:
+def read_session_meta(path: Path) -> dict[str, Any]:
+    """Public accessor for a rollout's session_meta, used by launcher correlation (Task 9A)."""
     record = _read_first_json_record(path)
-    meta = _extract_session_meta(record) if record is not None else {}
+    return _extract_session_meta(record) if record is not None else {}
+
+
+def _inspect(path: Path) -> DiscoveredSession:
+    meta = read_session_meta(path)
 
     raw_id = meta.get("id")
     if isinstance(raw_id, str) and raw_id:
