@@ -1,8 +1,8 @@
 """Command-line entry point for Codex Watchtower.
 
-Subcommand bodies are wired up in Task 29 once storage/ingest/API/launcher
-all exist (see docs/plans/2026-08-13-codex-watchtower-implementation.md).
-Until then this module only owns argument parsing and ``--version``.
+Subcommand bodies live in ``codex_watchtower.commands``/``service``,
+imported lazily so ``watchtower --version`` stays cheap and does not pull
+in storage/ingest/API/launcher machinery.
 """
 
 from __future__ import annotations
@@ -17,14 +17,34 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="watchtower")
     parser.add_argument("--version", action="store_true", help="print the version and exit")
     subparsers = parser.add_subparsers(dest="command")
-    subparsers.add_parser("serve", help="run discovery, ingestion, assessment, API, and notifier")
+
+    serve_parser = subparsers.add_parser(
+        "serve", help="run discovery, ingestion, assessment, API, and notifier"
+    )
+    serve_parser.add_argument("--config", default=None, help="path to config.toml")
+
     run_parser = subparsers.add_parser(
         "run", help="wrap a Codex invocation and capture process exit evidence"
     )
-    run_parser.add_argument("command", nargs=argparse.REMAINDER)
-    subparsers.add_parser("inspect", help="print current state for a session")
-    subparsers.add_parser("assess", help="request an on-demand Terra assessment")
-    subparsers.add_parser("doctor", help="check configuration and dependency health")
+    run_parser.add_argument("--config", default=None, help="path to config.toml")
+    # dest="argv", not "command": the top-level parser's subparsers already
+    # use dest="command" for the subcommand name itself, and REMAINDER here
+    # would silently overwrite that if it shared the same attribute.
+    run_parser.add_argument("wrapped_argv", nargs=argparse.REMAINDER, metavar="command")
+
+    inspect_parser = subparsers.add_parser("inspect", help="print current state for a session")
+    inspect_parser.add_argument("--config", default=None, help="path to config.toml")
+    inspect_parser.add_argument("session_id")
+
+    assess_parser = subparsers.add_parser("assess", help="request an on-demand Terra assessment")
+    assess_parser.add_argument("--config", default=None, help="path to config.toml")
+    assess_parser.add_argument("session_id")
+
+    doctor_parser = subparsers.add_parser(
+        "doctor", help="check configuration and dependency health"
+    )
+    doctor_parser.add_argument("--config", default=None, help="path to config.toml")
+
     return parser
 
 
@@ -41,8 +61,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    print(f"'{args.command}' is not implemented yet.")
-    return 1
+    from codex_watchtower import commands
+
+    return commands.dispatch(args.command, args)
 
 
 if __name__ == "__main__":

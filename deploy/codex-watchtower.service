@@ -1,0 +1,43 @@
+[Unit]
+Description=Codex Watchtower - local-first observer of autonomous Codex CLI runs
+Documentation=https://github.com/ya-yara/codex-watchtower
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a dedicated, unprivileged user -- never root. Create it with:
+#   useradd --system --home-dir /var/lib/codex-watchtower --shell /usr/sbin/nologin watchtower
+User=watchtower
+Group=watchtower
+WorkingDirectory=/var/lib/codex-watchtower
+
+# Explicit environment file for secrets (Telegram bot token, model API
+# keys). Never commit this file; it must be owner-readable only (0600).
+EnvironmentFile=-/etc/codex-watchtower/environment
+
+ExecStart=/usr/local/bin/watchtower serve --config /etc/codex-watchtower/config.toml
+
+Restart=on-failure
+RestartSec=5s
+
+# Hardening. Watchtower never mutates Codex or the workspace and binds
+# loopback-only by default, so it needs no broad filesystem or network
+# capability beyond reading the Codex sessions root and writing its own
+# state directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/codex-watchtower
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
