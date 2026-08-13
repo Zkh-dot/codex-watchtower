@@ -517,7 +517,7 @@
 
 1. Parametrize every escalation trigger from the specification, keeping `goal_alignment` and `status` triggers distinct.
 2. Verify healthy Luna results do not call Terra, and that confidence alone never triggers escalation.
-3. Verify advisory mode: Luna and Terra output reaches the API and message bodies but changes no notification decision.
+3. Verify advisory mode structurally: the reconciler emits `state`, `status`, and `notification_status`; only the first and third are derivable without model output, and no model-narrowed status reaches the notifier.
 4. Verify deterministic critical signals force attention despite reassuring model output.
 5. Verify Terra prose supersedes Luna only when valid.
 6. Verify timeout falls back to deterministic assessment.
@@ -596,13 +596,15 @@
 **Steps:**
 
 1. Add golden messages for warning, waiting, terminal failure, and terminal completion states.
-2. Test transition policy and concern fingerprinting over `(severity, kind, evidence_signal_id)` triples.
-3. Test changed prose with identical evidence is suppressed.
-4. Test that an advanced event cursor alone does not change the deduplication key, and that a restart replaying the same window sends nothing.
-5. Test the critical-concern cooldown resend and the digest path.
-6. Test critical evidence always includes a factual reason and event cursor in the body.
-7. Apply trusted-remote redaction, path minimization, Telegram markup escaping, `chat_id` allowlisting, and omission of prompts/output/local links.
-8. Commit: `feat: render deduplicated operator notifications`.
+2. Test transition policy and `signal_fingerprint` over `(severity, kind, signal_id)` triples taken from the rule engine, not from assessment concerns.
+3. Test the advisory guarantee: Luna reporting `looping` with no corresponding rule signal changes the displayed status and message body but sends nothing.
+4. Test `status_epoch`: a `waiting -> active_turn -> waiting` cycle sends twice, while repeats inside one episode send once.
+5. Test changed prose with identical evidence is suppressed.
+6. Test that an advanced event cursor alone does not change the deduplication key, and that a restart replaying the same window sends nothing.
+7. Test the critical-signal cooldown resend and the digest path.
+8. Test critical evidence always includes a factual reason and event cursor in the body.
+9. Apply trusted-remote redaction, path minimization, Telegram markup escaping, `chat_id` allowlisting, and omission of prompts/output/local links.
+10. Commit: `feat: render deduplicated operator notifications`.
 
 ### Task 27: Add Telegram Bot API notifier
 

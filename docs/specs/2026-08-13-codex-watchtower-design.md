@@ -338,6 +338,8 @@ The projection is fixed, and the reconciler applies it before any model output i
 
 `progressing`, `investigating`, `stalled`, `looping`, and `off_scope` are refinements of `active_turn` only. A model may narrow within the row its session state permits; it may never move the status to a different row. Terminal and waiting states are therefore never model-assigned, and a reassuring assessment cannot promote a session out of `terminal_failed`.
 
+A third field, `notification_status`, is what §5.10 delivers on. It is computed from deterministic evidence alone and never from model output, so a model narrowing is visible in the API and in message bodies without being able to trigger or suppress a message. The reconciler emits all three: `state` (deterministic lifecycle), `status` (display, may be model-narrowed), and `notification_status` (deterministic, delivery-authoritative).
+
 ### 5.9 Status and operator API
 
 Local bind only by default: `127.0.0.1`.
@@ -356,12 +358,20 @@ No mutation of Codex or the workspace is exposed. The POST endpoint does mutate 
 
 ### 5.10 Telegram notifier
 
+#### Notification status
+
+The notifier reads `notification_status`, not the assessment `status`. In advisory mode `notification_status` is derived **only** from deterministic lifecycle and rule signals; model output cannot produce, suppress, or alter it.
+
+This closes a contradiction: §5.8 lets a model narrow `active_turn` to `stalled`, `looping`, or `off_scope`, and this section notifies on exactly those values, so model output would have driven delivery despite the advisory guarantee. Luna reporting `looping` with no corresponding rule signal changes the displayed status and the message body, and sends nothing.
+
+`notification_status` takes `stalled`, `looping`, or `off_scope` only from the matching rule signal (`stagnation`, `repeated_command`/`recurring_error`, `scope_expansion`/`forbidden_path`); every other value comes from the deterministic session state of §5.1 and §5.11. In v0.2.0, promoting model output to a notification input means allowing it to set this field, and that promotion is what the calibration gates in §10.3 authorize.
+
 Delivery policy:
 
 Send when:
 
-- `needs_attention` changes from false to true;
-- status enters `waiting`, `stalled`, `looping`, `off_scope`, `terminal_failed`, `terminal_completed`, or `terminal_completed_unconfirmed`;
+- a deterministic signal raises `needs_attention` from false to true;
+- `notification_status` enters `waiting`, `stalled`, `looping`, `off_scope`, `terminal_failed`, `terminal_completed`, or `idle`;
 - a warning persists and materially changes;
 - a configured periodic digest is due, default disabled.
 
@@ -370,14 +380,16 @@ Do not send when only wording changes.
 Deduplication key:
 
 ```text
-session_id + authoritative_status + concern_fingerprint
+session_id + status_epoch + notification_status + signal_fingerprint
 ```
 
-The key deliberately excludes the event cursor. The cursor advances on every ingested event, so including it would make the key unique per assessment and suppress no duplicate at all; it would also re-notify after a restart replayed the same window under a new cursor.
+The key excludes the event cursor. The cursor advances on every ingested event, so including it would make the key unique per assessment and suppress no duplicate at all; it would also re-notify after a restart replayed the same window under a new cursor.
 
-`concern_fingerprint` is the sorted set of `(severity, kind, evidence_signal_id)` triples from the authoritative assessment. It ignores prose, model identity, confidence, and event cursors, so a reworded explanation of unchanged evidence does not resend.
+`status_epoch` is a per-session counter incremented every time `notification_status` changes to a different value. Without it the key persists across transitions, so a `waiting → active_turn → waiting` cycle would reuse the key of the first `waiting` and be suppressed, contradicting the rule that entering `waiting` sends. The epoch makes each entry into a state a distinct episode while still collapsing repeats within one episode.
 
-For each key Watchtower persists the last delivery, its cursor, and its send time. On a repeat key it resends only when a configured cooldown has elapsed and the concern is still `critical`, or when a periodic digest is due. The cursor is carried in the message body as provenance, never in the key.
+`signal_fingerprint` is the sorted set of `(severity, kind, signal_id)` triples over the **deterministic signals** active at delivery time. It is computed from the rule engine, whose signals carry a stable `id`, `kind`, and `severity` by schema. It is deliberately not computed from assessment concerns: `concerns[].evidence_refs` is a bare string array whose entries may point at event, signal, or system evidence and carry no `ref_type`, so no stable typed identity can be recovered from it, and a concern citing only event or system evidence would yield no signal identity at all.
+
+For each key Watchtower persists the last delivery, its cursor, and its send time. On a repeat key it resends only when a configured cooldown has elapsed and a critical signal is still active, or when a periodic digest is due. The cursor is carried in the message body as provenance, never in the key.
 
 A message includes elapsed time, current action, alignment, concerns, latest test result, redacted changed paths, and session ID/API base when available. Telegram is a separate remote sink: it always applies trusted-remote redaction, never sends prompts or command-output excerpts, validates the configured `chat_id` against an allowlist, escapes Telegram markup, and omits local deep links.
 
@@ -503,7 +515,7 @@ Commit synthetic and redacted JSONL fixtures covering:
 
 Calibration gates v0.2.0, not v0.1.0. It requires at least 30 completed real sessions covering looping, off-scope, and failed outcomes, plus hand labeling with evidence IDs; that corpus does not exist yet and cannot be manufactured honestly. Blocking the first release on it would withhold the deterministic rules, which are useful without any model at all.
 
-v0.1.0 therefore ships in **advisory mode**: deterministic rules are authoritative and notify on their own, Luna assessments are produced and shown in the API and in message bodies, and no notification decision depends on model output. Terra escalation is available but off by default. Advisory mode is not a degraded fallback; it is the supported first release, and the failure modes calibration protects against cannot occur while notification is rule-driven.
+v0.1.0 therefore ships in **advisory mode**: deterministic rules are authoritative and notify on their own, Luna assessments are produced and shown in the API and in message bodies, and no notification decision depends on model output. The guarantee is structural, not a convention: the notifier reads `notification_status`, which §5.8 computes from deterministic evidence only, so there is no path from model output to a delivery decision. Terra escalation is available but off by default. Advisory mode is not a degraded fallback; it is the supported first release, and the failure modes calibration protects against cannot occur while notification is rule-driven.
 
 v0.2.0 promotes model output to a notification input only after the gates below pass.
 
