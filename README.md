@@ -19,6 +19,7 @@ The project is documentation-first. No runtime implementation has been committed
 - [Verified references and research notes](docs/references/references.md)
 - [Normalized observation schema](schemas/observation.schema.json)
 - [Model assessment schema](schemas/assessment.schema.json)
+- [Provider-facing wire projection of the assessment schema](schemas/assessment.wire.schema.json)
 
 ## Design principles
 
@@ -35,9 +36,10 @@ The first usable version will:
 
 - discover active `~/.codex/sessions/**/rollout-*.jsonl` sessions;
 - normalize new Codex events;
+- record process exit evidence for runs started through `watchtower run`, and fall back to an explicitly unconfirmed terminal state otherwise;
 - query only verified AgentLens Codex fields when a compatible adapter is available;
 - produce a Luna summary every 10 minutes or on significant change;
-- escalate suspicious or low-confidence cases to Terra;
+- escalate anomalous or conflicting cases to Terra;
 - expose a local JSON/HTTP status endpoint;
 - optionally send Telegram notifications;
 - expose a Codex Trace API base and session identifier for manual drill-down when available.
@@ -53,6 +55,8 @@ The first usable version will:
 ## Status
 
 Draft architecture and execution plan pending integration spikes and implementation validation. No runtime implementation has started.
+
+v0.1.0 is planned in advisory mode: deterministic rules are authoritative and notify on their own, and model assessments are displayed without influencing any notification decision. Model output is promoted to a notification input in v0.2.0, once the frozen calibration corpus and its gates exist.
 
 ## License
 
