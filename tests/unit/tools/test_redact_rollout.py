@@ -69,10 +69,10 @@ def test_secrets_are_stripped(tmp_path: Path) -> None:
     raw_output = out.read_text()
     assert "sk-abcdefghijklmnop123456" not in raw_output
     assert "secret_token_value" not in raw_output
-    # Secrets in stripped fields (text) are removed entirely.
-    assert records[0]["payload"]["text"] == "[STRIPPED]"
-    # Secrets in preserved fields (command) are redacted with class markers.
-    assert "[REDACTED:" in str(records[1]["payload"]["command"])
+    assert "curl" not in raw_output
+    # Text and command are pseudonymized, not preserved.
+    assert records[0]["payload"]["text"].startswith("psuedo-text-")
+    assert records[1]["payload"]["command"].startswith("psuedo-command-")
     assert report.records_processed == 2
     assert report.records_redacted >= 1
 
@@ -115,6 +115,9 @@ def test_exit_codes_and_test_counts_preserved(tmp_path: Path) -> None:
     assert records[1]["payload"]["passed"] == 10
     assert records[1]["payload"]["failed"] == 2
     assert records[1]["payload"]["total"] == 12
+    # command and stdout_tail are pseudonymized/stripped, not preserved.
+    assert "pytest" not in out.read_text()
+    assert "FAIL" not in out.read_text()
 
 
 def test_workspace_path_pseudonymized(tmp_path: Path) -> None:
@@ -135,6 +138,8 @@ def test_workspace_path_pseudonymized(tmp_path: Path) -> None:
 
     assert records[0]["payload"]["cwd"] != "/home/user/secret-project"
     assert "secret-project" not in out.read_text()
+    assert records[0]["payload"]["id"] != "sess-1"
+    assert "sess-1" not in out.read_text()
     assert report.paths_pseudonymized >= 1
 
 
@@ -252,9 +257,14 @@ def test_source_bodies_stripped(tmp_path: Path) -> None:
     redact_rollout(inp, out, PUBLIC_PROV)
     records = _read_output(out)
 
-    assert records[0]["payload"]["diff"] == "[STRIPPED]"
-    assert records[1]["payload"]["stdout_tail"] == "[STRIPPED]"
+    # diff is pseudonymized, not preserved.
+    assert records[0]["payload"]["diff"] != "import os\nSECRET = 'key'"
+    assert records[1]["payload"]["stdout_tail"] != "sensitive output"
     assert "sensitive output" not in out.read_text()
+    assert "import os" not in out.read_text()
+    # path is pseudonymized.
+    assert "src/main.py" not in out.read_text()
+    assert "cat" not in out.read_text()
 
 
 def test_output_sha256_computed(tmp_path: Path) -> None:
@@ -269,3 +279,33 @@ def test_output_sha256_computed(tmp_path: Path) -> None:
 
     expected = hashlib.sha256(out.read_bytes()).hexdigest()
     assert report.output_sha256 == expected
+
+
+def test_samefile_input_output_rejected(tmp_path: Path) -> None:
+    inp = tmp_path / "input.jsonl"
+    _write_rollout(
+        inp, [{"type": "turn_started", "timestamp": "2026-08-14T10:00:00Z", "payload": {}}]
+    )
+    with pytest.raises(ValueError, match="same file"):
+        redact_rollout(inp, inp, PUBLIC_PROV, force=True)
+
+
+def test_default_deny_unknown_keys(tmp_path: Path) -> None:
+    inp = tmp_path / "input.jsonl"
+    out = tmp_path / "output.jsonl"
+    _write_rollout(
+        inp,
+        [
+            {
+                "type": "custom_event",
+                "timestamp": "2026-08-14T10:00:00Z",
+                "payload": {"unknown_field": "secret", "another": "data"},
+            },
+        ],
+    )
+    redact_rollout(inp, out, PUBLIC_PROV)
+    records = _read_output(out)
+    assert records[0]["payload"]["unknown_field"] == "[STRIPPED]"
+    assert records[0]["payload"]["another"] == "[STRIPPED]"
+    assert "secret" not in out.read_text()
+    assert "data" not in out.read_text()

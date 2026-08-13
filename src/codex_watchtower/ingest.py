@@ -89,7 +89,7 @@ class IngestionService:
         repo: Repository,
         *,
         quiet_grace_period: timedelta = lifecycle.DEFAULT_QUIET_GRACE_PERIOD,
-        enforce_file_safety: bool = False,
+        enforce_file_safety: bool = True,
         expected_uid: int | None = None,
         telemetry: Telemetry | None = None,
     ) -> None:
@@ -140,7 +140,12 @@ class IngestionService:
         read_result = read_new_records(
             path, resolved, sessions_root=sessions_root, expected_uid=self.expected_uid
         )
-        self.repo.save_cursor(session_id, read_result.cursor)
+
+        # Atomic per-session batch: cursor, events, lifecycle, reports, and
+        # reconciliation all commit together. A crash midway leaves no
+        # partial state — the cursor is not advanced unless events are
+        # persisted, and vice versa.
+        self.repo.begin_transaction()
 
         new_events: list[domain.Event] = []
         for raw in read_result.records:
@@ -177,12 +182,13 @@ class IngestionService:
             else:
                 self.telemetry.event_rejected(session_id, "duplicate")
 
+        previous_state = state.state
         if new_events:
             state = lifecycle.on_new_events(state, new_events, now)
         if state.fatal is None:
             state = lifecycle.tick(state, now=now, quiet_grace_period=self.quiet_grace_period)
 
-        transition = lifecycle.report_for_terminal_or_idle(state)
+        transition = lifecycle.report_for_terminal_or_idle(state, previous_state=previous_state)
         state = transition.state
         if transition.report is not None:
             self.repo.insert_report(
@@ -199,8 +205,11 @@ class IngestionService:
                 },
             )
 
+        # Cursor saved last, atomically with events/lifecycle/reports.
+        self.repo.save_cursor(session_id, read_result.cursor)
         _persist_lifecycle(self.repo, state)
         self._run_rules_and_reconcile(session_id, discovered.workspace or "", state, now)
+        self.repo.commit_transaction()
 
     def _run_rules_and_reconcile(
         self, session_id: str, workspace: str, state: lifecycle.LifecycleState, now: datetime

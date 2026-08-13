@@ -25,8 +25,8 @@ uv run pytest -q
 # Run the doctor check
 uv run watchtower doctor
 
-# Start watching sessions
-uv run watchtower watch --sessions-root ~/.codex/sessions
+# Start serving (ingestion + local API)
+uv run watchtower serve
 ```
 
 ## Documents

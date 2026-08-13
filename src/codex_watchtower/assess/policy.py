@@ -250,12 +250,20 @@ def reconcile(
     # narrowing (e.g. progressing <-> stalled) with no state change, which
     # gets exactly one additional increment here.
     lifecycle_delta = lifecycle_state.status_epoch - previous.lifecycle_status_epoch
+    status_epoch = previous.status_epoch
+    status_exhausted = False
     if lifecycle_delta > 0:
-        status_epoch = previous.status_epoch + lifecycle_delta
+        new_epoch = previous.status_epoch + lifecycle_delta
+        if new_epoch > lifecycle.MAX_STATUS_EPOCH:
+            status_exhausted = True
+        else:
+            status_epoch = new_epoch
     elif notification_status != previous.notification_status:
-        status_epoch = previous.status_epoch + 1
-    else:
-        status_epoch = previous.status_epoch
+        new_epoch = previous.status_epoch + 1
+        if new_epoch > lifecycle.MAX_STATUS_EPOCH:
+            status_exhausted = True
+        else:
+            status_epoch = new_epoch
 
     fatal = None
     if lifecycle_state.fatal is not None:
@@ -269,6 +277,12 @@ def reconcile(
             reason=domain.FatalReason.attention_epoch_exhausted,
             detected_at=now.isoformat(),
             detail=f"attention_epoch saturated at {MAX_ATTENTION_EPOCH}",
+        )
+    elif status_exhausted:
+        fatal = domain.Fatal(
+            reason=domain.FatalReason.status_epoch_exhausted,
+            detected_at=now.isoformat(),
+            detail=f"status_epoch would exceed {lifecycle.MAX_STATUS_EPOCH}",
         )
 
     if fatal is not None:

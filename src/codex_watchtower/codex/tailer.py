@@ -206,6 +206,11 @@ def read_new_records(
     A trailing partial (final) line is never parsed and never advances the
     cursor past it; it is simply left on disk for the next call to re-read
     alongside whatever gets appended after it.
+
+    Safety: when ``sessions_root`` is provided, the file is opened with
+    ``O_NOFOLLOW`` and identity-checked on the same fd. The prefix hash
+    and new content are read through the same fd to eliminate the
+    TOCTOU window between ``resolve_start`` and content reads.
     """
     if sessions_root is not None:
         fd = open_safe(path, sessions_root, expected_uid=expected_uid)
@@ -214,16 +219,22 @@ def read_new_records(
         file_obj = path.open("rb")
 
     with file_obj as f:
-        f.seek(cursor.byte_offset)
+        # Read and hash the prefix on the same fd — no re-open.
+        hasher = hashlib.sha256()
+        remaining_prefix = cursor.byte_offset
+        while remaining_prefix > 0:
+            chunk = f.read(min(remaining_prefix, 1024 * 1024))
+            if not chunk:
+                break
+            hasher.update(chunk)
+            remaining_prefix -= len(chunk)
+
+        # Read new bytes from the same fd.
         new_bytes = f.read()
 
     lines = new_bytes.split(b"\n")
     complete_lines = lines[:-1]
     trailing_partial = lines[-1]
-
-    hasher = hashlib.sha256()
-    with path.open("rb") as f:
-        hasher.update(f.read(cursor.byte_offset))
 
     records: list[RawRecord] = []
     offset = cursor.byte_offset

@@ -314,16 +314,27 @@ def enter_waiting(state: LifecycleState, *, now: datetime) -> LifecycleState:
     return _move_to(state, domain.SessionState.waiting, now, event_timestamp=now.isoformat())
 
 
-def report_for_terminal_or_idle(state: LifecycleState) -> Transition:
-    """Emit (or supersede) a report when state has just entered idle or an execution-terminal state.
+def report_for_terminal_or_idle(
+    state: LifecycleState, *, previous_state: domain.SessionState | None = None
+) -> Transition:
+    """Emit (or supersede) a report only when state has *just entered* idle or terminal.
 
     Idle reports are provisional (no process evidence exists at all);
     execution-terminal reports are final for that execution and still
     supersedable by a later resume, per spec 5.8's "Executions and session
-    lifetime".
+    lifetime". A report is emitted only on the transition into a reportable
+    state — not on every poll while already in that state — to avoid
+    duplicate reports and false supersedes.
     """
-    if state.state == domain.SessionState.idle:
+    if previous_state == state.state:
+        return Transition(state=state)
+    if state.state == domain.SessionState.idle and previous_state != domain.SessionState.idle:
         return _next_report(state, provisional=True)
-    if state.state in _TERMINAL_STATES:
+    if state.state in _TERMINAL_STATES and previous_state not in _TERMINAL_STATES:
+        return _next_report(state, provisional=False)
+    if state.state in _REOPENABLE_STATES and previous_state not in _REOPENABLE_STATES:
+        # Transitioned from active/between_turns/waiting into a reportable state.
+        if state.state == domain.SessionState.idle:
+            return _next_report(state, provisional=True)
         return _next_report(state, provisional=False)
     return Transition(state=state)

@@ -29,6 +29,8 @@ class ModelProfile:
     chunk_size: int = DEFAULT_CHUNK_SIZE
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     retry_budget: int = DEFAULT_RETRY_BUDGET
+    trust_env: bool = False
+    follow_redirects: bool = False
 
     def __post_init__(self) -> None:
         if not (MIN_MAX_RESPONSE_BYTES <= self.max_response_bytes <= MAX_MAX_RESPONSE_BYTES):

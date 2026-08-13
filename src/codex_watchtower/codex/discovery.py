@@ -40,7 +40,7 @@ def discover_sessions(sessions_root: Path) -> list[DiscoveredSession]:
         return []
     discovered = []
     for path in sorted(sessions_root.glob("*/*/*/rollout-*.jsonl")):
-        if not path.is_file():
+        if not path.is_file() or path.is_symlink():
             continue
         discovered.append(_inspect(path))
     return discovered

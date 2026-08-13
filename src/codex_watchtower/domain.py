@@ -268,7 +268,9 @@ class Signal(BaseModel):
     def _bounded_payload(cls, value: dict[str, PayloadValue]) -> dict[str, PayloadValue]:
         if len(value) > 24:
             raise ValueError("payload must have at most 24 entries")
-        for v in value.values():
+        for key, v in value.items():
+            if len(key) > 100:
+                raise ValueError("payload property names must be at most 100 characters")
             if isinstance(v, str) and len(v) > 500:
                 raise ValueError("payload string values must be at most 500 characters")
             if isinstance(v, int) and not isinstance(v, bool):

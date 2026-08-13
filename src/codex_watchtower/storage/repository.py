@@ -74,6 +74,12 @@ class Repository:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
 
+    def begin_transaction(self) -> None:
+        self._conn.execute("BEGIN")
+
+    def commit_transaction(self) -> None:
+        self._conn.execute("COMMIT")
+
     @property
     def connection(self) -> sqlite3.Connection:
         return self._conn

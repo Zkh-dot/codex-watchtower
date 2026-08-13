@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from codex_watchtower import domain
@@ -74,6 +75,15 @@ def _optional_str_field(payload: dict[str, Any], key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _valid_timestamp(ts: str, fallback: str) -> str:
+    """Return ts if it parses as RFC 3339, otherwise the fallback."""
+    try:
+        datetime.fromisoformat(ts[:-1] + "+00:00" if ts.endswith("Z") else ts)
+        return ts
+    except (ValueError, IndexError):
+        return fallback
+
+
 def _optional_int_field(payload: dict[str, Any], key: str) -> int | None:
     value = payload.get(key)
     if isinstance(value, bool):
@@ -116,7 +126,9 @@ def normalize_record(
 
     payload_any = record.parsed.get("payload")
     payload: dict[str, Any] = payload_any if isinstance(payload_any, dict) else {}
-    timestamp = _optional_str_field(record.parsed, "timestamp") or fallback_timestamp
+    timestamp = _valid_timestamp(
+        _optional_str_field(record.parsed, "timestamp") or "", fallback_timestamp
+    )
 
     kind = _KNOWN_TYPES.get(raw_type) if isinstance(raw_type, str) else None
     source_type = raw_type if isinstance(raw_type, str) else None

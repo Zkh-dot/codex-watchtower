@@ -98,6 +98,8 @@ class ModelEndpointConfig:
             api_key_env_var=self.api_key_env_var,
             max_response_bytes=self.max_response_bytes,
             retry_budget=self.retry_budget,
+            trust_env=self.remote_transport_policy.trust_environment_proxy,
+            follow_redirects=self.remote_transport_policy.allow_redirects,
         )
 
 

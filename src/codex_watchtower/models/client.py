@@ -114,7 +114,11 @@ def assess(
     *,
     http_client: httpx.Client | None = None,
 ) -> AssessResult:
-    client = http_client or httpx.Client(timeout=profile.timeout_seconds)
+    client = http_client or httpx.Client(
+        timeout=profile.timeout_seconds,
+        trust_env=profile.trust_env,
+        follow_redirects=profile.follow_redirects,
+    )
     body = build_request_body(profile, system_prompt, observation)
     max_attempts = profile.retry_budget + 1
 
@@ -123,7 +127,22 @@ def assess(
     while attempts < max_attempts:
         attempts += 1
         try:
-            response = client.post(profile.endpoint, json=body, headers=_auth_headers(profile))
+            # Use streaming so the response body is never fully materialized
+            # before the bounded read cap applies. Without stream=True,
+            # httpx reads the entire body into memory before we can check
+            # the size, defeating the oversized-response protection.
+            with client.stream(
+                "POST", profile.endpoint, json=body, headers=_auth_headers(profile)
+            ) as response:
+                if response.status_code != 200:
+                    last_reason = f"http_{response.status_code}"
+                    continue
+
+                read_result = read_bounded_response(
+                    response,
+                    max_response_bytes=profile.max_response_bytes,
+                    chunk_size=profile.chunk_size,
+                )
         except httpx.TimeoutException:
             last_reason = "timeout"
             continue
@@ -131,13 +150,6 @@ def assess(
             last_reason = "network_error"
             continue
 
-        if response.status_code != 200:
-            last_reason = f"http_{response.status_code}"
-            continue
-
-        read_result = read_bounded_response(
-            response, max_response_bytes=profile.max_response_bytes, chunk_size=profile.chunk_size
-        )
         if read_result.truncated:
             # Non-retryable: the same endpoint returning the same oversized
             # body cannot be made acceptable by asking again.

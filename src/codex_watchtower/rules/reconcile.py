@@ -95,17 +95,34 @@ def _merge_same_kind(local: domain.Signal, agentlens: domain.Signal) -> domain.S
 def reconcile_signals(
     local_signals: list[domain.Signal], agentlens_signals: list[domain.Signal]
 ) -> list[domain.Signal]:
-    by_kind: dict[domain.SignalKind, domain.Signal] = {s.kind: s for s in local_signals}
+    """Merge local and AgentLens signals without collapsing independent findings.
+
+    Local signals are keyed by their ID (not kind), so two distinct
+    ``forbidden_path`` violations remain as separate signals. An AgentLens
+    signal of the same kind as a local signal merges with the *first*
+    matching local signal (corroboration); it does not replace or
+    collapse other local signals of the same kind.
+    """
+    result: list[domain.Signal] = list(local_signals)
+    local_by_kind: dict[domain.SignalKind, domain.Signal] = {}
+    for s in local_signals:
+        # Only track the first local signal per kind for AgentLens merge.
+        if s.kind not in local_by_kind:
+            local_by_kind[s.kind] = s
 
     for agentlens_signal in agentlens_signals:
-        existing = by_kind.get(agentlens_signal.kind)
+        existing = local_by_kind.get(agentlens_signal.kind)
         if existing is None:
-            by_kind[agentlens_signal.kind] = agentlens_signal
+            result.append(agentlens_signal)
             continue
         if existing.source == agentlens_signal.source:
             continue  # identical source already covers this kind
         if agentlens_signal.freshness != domain.Freshness.current:
             continue  # stale AgentLens evidence cannot overwrite/upgrade newer local evidence
-        by_kind[agentlens_signal.kind] = _merge_same_kind(existing, agentlens_signal)
+        merged = _merge_same_kind(existing, agentlens_signal)
+        # Replace the original local signal in the result with the merged version.
+        idx = result.index(existing)
+        result[idx] = merged
+        local_by_kind[agentlens_signal.kind] = merged
 
-    return list(by_kind.values())
+    return result

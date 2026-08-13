@@ -24,19 +24,30 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from codex_watchtower.privacy.redact import redact_text
-
 # Session-level fields that are preserved (metadata, not content).
 _PRESERVED_TOP_KEYS = frozenset({"type", "timestamp"})
 
-# Payload fields that are preserved for behavior analysis.
-_PRESERVED_PAYLOAD_KEYS = frozenset(
-    {"id", "cwd", "exit_code", "path", "change", "command", "passed", "failed", "total"}
-)
+# Payload fields preserved for behavior analysis — but ALL string values
+# are pseudonymized or redacted, never passed through verbatim.
+_PRESERVED_PAYLOAD_NUMERIC_KEYS = frozenset({"exit_code", "passed", "failed", "total"})
 
-# Payload fields whose values are stripped entirely (source bodies, text content).
+# Payload fields stripped entirely (source bodies, text content, commands, paths, IDs).
 _STRIPPED_PAYLOAD_KEYS = frozenset(
-    {"text", "stdout_tail", "stderr_tail", "stdout", "stderr", "diff", "content", "body", "source"}
+    {
+        "text",
+        "stdout_tail",
+        "stderr_tail",
+        "stdout",
+        "stderr",
+        "diff",
+        "content",
+        "body",
+        "source",
+        "command",
+        "cwd",
+        "path",
+        "id",
+    }
 )
 
 _PSEUDONYM_RE = re.compile(r"/[A-Za-z0-9._\-/]+")
@@ -88,44 +99,43 @@ class RedactionReport:
         }
 
 
-def _pseudonymize_path(path_str: str, mapping: dict[str, str]) -> str:
-    """Replace workspace path components with deterministic pseudonyms."""
-    if path_str in mapping:
-        return mapping[path_str]
-    pseudonym = f"/workspace/psuedo-{hashlib.sha256(path_str.encode()).hexdigest()[:12]}"
-    mapping[path_str] = pseudonym
+def _pseudonymize_value(value: str, mapping: dict[str, str], prefix: str) -> str:
+    """Deterministically pseudonymize any string value."""
+    if value in mapping:
+        return mapping[value]
+    pseudonym = f"{prefix}-{hashlib.sha256(value.encode()).hexdigest()[:12]}"
+    mapping[value] = pseudonym
     return pseudonym
 
 
 def _redact_payload(
     payload: dict[str, Any], path_mapping: dict[str, str], report: RedactionReport
 ) -> dict[str, Any]:
+    """Default-deny: every payload key is stripped unless explicitly preserved.
+
+    Preserved numeric fields keep their values (exit_code, test counts).
+    Everything else — paths, commands, IDs, text, diffs, unknown keys —
+    is stripped or pseudonymized. No absolute path, command text, or
+    session ID survives into the fixture.
+    """
     result: dict[str, Any] = {}
     for key, value in payload.items():
+        if key in _PRESERVED_PAYLOAD_NUMERIC_KEYS:
+            result[key] = value
+            continue
         if key in _STRIPPED_PAYLOAD_KEYS:
-            result[key] = "[STRIPPED]"
+            if isinstance(value, str) and value:
+                # Pseudonymize for traceability, strip for content.
+                pseudonym = _pseudonymize_value(value, path_mapping, f"psuedo-{key}")
+                result[key] = pseudonym
+                report.paths_pseudonymized += 1
+            else:
+                result[key] = "[STRIPPED]"
             report.records_redacted += 1
             continue
-        if key in _PRESERVED_PAYLOAD_KEYS:
-            if isinstance(value, str):
-                redacted = redact_text(value)
-                if redacted.classes:
-                    report.redaction_classes.update(redacted.classes)
-                    report.records_redacted += 1
-                if key == "cwd":
-                    pseudonymized = _pseudonymize_path(value, path_mapping)
-                    if pseudonymized != value:
-                        report.paths_pseudonymized += 1
-                    result[key] = pseudonymized
-                elif key == "path":
-                    result[key] = redacted.text
-                else:
-                    result[key] = redacted.text
-            else:
-                result[key] = value
-        else:
-            result[key] = "[STRIPPED]"
-            report.records_redacted += 1
+        # Default-deny: any unrecognized key is stripped.
+        result[key] = "[STRIPPED]"
+        report.records_redacted += 1
     return result
 
 
@@ -138,6 +148,15 @@ def redact_rollout(
 ) -> RedactionReport:
     if not input_path.is_file():
         raise FileNotFoundError(f"input file not found: {input_path}")
+    # Reject same-file input/output to prevent source destruction.
+    try:
+        if input_path.resolve() == output_path.resolve():
+            raise ValueError(
+                f"input and output resolve to the same file ({input_path}); "
+                "use a different output path"
+            )
+    except OSError:
+        pass  # output doesn't exist yet — safe
     if output_path.exists() and not force:
         raise FileExistsError(
             f"output file already exists: {output_path} (pass --force to overwrite)"
@@ -152,39 +171,61 @@ def redact_rollout(
     path_mapping: dict[str, str] = {}
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with (
-        input_path.open("r", encoding="utf-8", errors="replace") as infile,
-        output_path.open("w", encoding="utf-8") as outfile,
-    ):
-        for line in infile:
-            line = line.strip()
-            if not line:
-                continue
-            report.records_processed += 1
-            try:
-                record: dict[str, Any] = json.loads(line)
-            except json.JSONDecodeError:
-                outfile.write(
-                    json.dumps(
-                        {"type": "malformed", "raw_hash": hashlib.sha256(line.encode()).hexdigest()}
+    # Write to a temp file first, then atomically rename to prevent
+    # source destruction if input == output or a crash occurs mid-write.
+    import tempfile
+
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        dir=output_path.parent, prefix=".redact_tmp_", suffix=".jsonl"
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        import os as _os
+
+        _os.close(tmp_fd)
+        with (
+            input_path.open("r", encoding="utf-8", errors="replace") as infile,
+            tmp_path.open("w", encoding="utf-8") as outfile,
+        ):
+            for line in infile:
+                line = line.strip()
+                if not line:
+                    continue
+                report.records_processed += 1
+                try:
+                    record: dict[str, Any] = json.loads(line)
+                except json.JSONDecodeError:
+                    outfile.write(
+                        json.dumps(
+                            {
+                                "type": "malformed",
+                                "raw_hash": hashlib.sha256(line.encode()).hexdigest(),
+                            }
+                        )
+                        + "\n"
                     )
-                    + "\n"
+                    report.records_redacted += 1
+                    continue
+
+                redacted_record: dict[str, Any] = {}
+                for key in _PRESERVED_TOP_KEYS:
+                    if key in record:
+                        redacted_record[key] = record[key]
+
+                payload = record.get("payload")
+                if isinstance(payload, dict):
+                    redacted_record["payload"] = _redact_payload(payload, path_mapping, report)
+                else:
+                    redacted_record["payload"] = {}
+
+                outfile.write(
+                    json.dumps(redacted_record, separators=(",", ":"), sort_keys=True) + "\n"
                 )
-                report.records_redacted += 1
-                continue
 
-            redacted_record: dict[str, Any] = {}
-            for key in _PRESERVED_TOP_KEYS:
-                if key in record:
-                    redacted_record[key] = record[key]
-
-            payload = record.get("payload")
-            if isinstance(payload, dict):
-                redacted_record["payload"] = _redact_payload(payload, path_mapping, report)
-            else:
-                redacted_record["payload"] = {}
-
-            outfile.write(json.dumps(redacted_record, separators=(",", ":"), sort_keys=True) + "\n")
+        tmp_path.replace(output_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
     with output_path.open("rb") as f:
         report.output_sha256 = hashlib.sha256(f.read()).hexdigest()
