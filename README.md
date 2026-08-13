@@ -20,6 +20,7 @@ The project is documentation-first. No runtime implementation has been committed
 - [Normalized observation schema](schemas/observation.schema.json)
 - [Model assessment schema](schemas/assessment.schema.json)
 - [Provider-facing wire projection of the assessment schema](schemas/assessment.wire.schema.json)
+- [Reconciled assessment schema](schemas/reconciled_assessment.schema.json)
 
 ## Design principles
 

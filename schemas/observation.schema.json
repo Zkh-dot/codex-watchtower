@@ -58,6 +58,7 @@
             "terminal_completed",
             "terminal_failed",
             "idle",
+            "identity_broken",
             "unknown"
           ]
         },

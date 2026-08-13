@@ -117,7 +117,7 @@ Responsibilities:
 - watch the configured Codex sessions root;
 - identify new and modified `rollout-*.jsonl` files;
 - extract session ID, workspace, start time, source, model, and original goal;
-- classify lifecycle as `active_turn`, `between_turns`, `waiting`, `idle`, `terminal_completed`, `terminal_failed`, or `unknown`;
+- classify lifecycle as `active_turn`, `between_turns`, `waiting`, `idle`, `terminal_completed`, `terminal_failed`, `identity_broken`, or `unknown`;
 - map a session to a stable Watchtower record.
 
 The first user task message is the default goal. The optional launcher in §5.11 may supply a clearer explicit goal, path boundaries, and process evidence.
@@ -390,11 +390,14 @@ The projection is fixed, and the reconciler applies it before any model output i
 | `terminal_completed` | `terminal_completed` |
 | `idle` | `idle` |
 | `terminal_failed` | `terminal_failed` |
+| `identity_broken` | `unknown`, with a critical signal; ingestion has stopped |
 | `unknown` | `unknown` |
 
 `progressing`, `investigating`, `stalled`, `looping`, and `off_scope` are refinements of `active_turn` only. A model may narrow within the row its session state permits; it may never move the status to a different row. Terminal and waiting states are therefore never model-assigned, and a reassuring assessment cannot promote a session out of `terminal_failed`. The terminal rows describe the latest execution, and only new deterministic evidence — a new event or a new execution — moves a session out of them.
 
 A third field, `notification_status`, is what §5.10 delivers on. It is computed from deterministic evidence alone and never from model output, so a model narrowing is visible in the API and in message bodies without being able to trigger or suppress a message. The reconciler emits all three: `state` (deterministic lifecycle), `status` (display, may be model-narrowed), and `notification_status` (deterministic, delivery-authoritative).
+
+That output has its own committed contract, `schemas/reconciled_assessment.schema.json`. It cannot be expressed by `assessment.schema.json`, which carries only `status` and closes with `additionalProperties: false`: without a separate schema the advisory-mode boundary between model result, reconciler, and notifier would be a convention rather than something a test can assert. The reconciled schema embeds the model assessment unchanged and nullable, carries `state`, `status`, `notification_status`, both epochs, the deterministic `needs_attention`, the active signal set and its fingerprint, and the report version state. It is the payload of the status API and the input to the notifier.
 
 ### 5.9 Status and operator API
 
@@ -436,12 +439,14 @@ Do not send when only wording changes.
 Deduplication key:
 
 ```text
-session_id + status_epoch + notification_status + signal_fingerprint
+session_id + status_epoch + attention_epoch + notification_status + signal_fingerprint
 ```
 
 The key excludes the event cursor. The cursor advances on every ingested event, so including it would make the key unique per assessment and suppress no duplicate at all; it would also re-notify after a restart replayed the same window under a new cursor.
 
 `status_epoch` is a per-session counter incremented every time `notification_status` changes to a different value. Without it the key persists across transitions, so a `waiting → active_turn → waiting` cycle would reuse the key of the first `waiting` and be suppressed, contradicting the rule that entering `waiting` sends. The epoch makes each entry into a state a distinct episode while still collapsing repeats within one episode.
+
+`attention_epoch` is a second counter, incremented on every deterministic `needs_attention` transition from false to true. `status_epoch` alone does not cover signal reactivation: a signal can activate, clear, and activate again while `notification_status` stays `progressing` throughout, in which case epoch, status, and fingerprint all match the first episode and a genuine new `false → true` transition is suppressed — a warning silently, a critical until its cooldown. Since the delivery policy sends on every such transition, the key must change on every such transition. The two epochs are independent: state changes advance one, attention changes advance the other, and either alone opens a new episode.
 
 `signal_fingerprint` is the sorted set of `(severity, kind, signal_id)` triples over the **deterministic signals** active at delivery time. It is computed from the rule engine, whose signals carry a stable `id`, `kind`, and `severity` by schema. It is deliberately not computed from assessment concerns: `concerns[].evidence_refs` is a bare string array whose entries may point at event, signal, or system evidence and carry no `ref_type`, so no stable typed identity can be recovered from it, and a concern citing only event or system evidence would yield no signal identity at all.
 

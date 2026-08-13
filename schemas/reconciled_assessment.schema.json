@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ya-yara/codex-watchtower/schemas/reconciled_assessment.schema.json",
+  "title": "WatchtowerReconciledAssessment",
+  "description": "Authoritative output of the policy reconciler (specification 5.8) and the payload of the status API and notifier. Separates the three status fields the design requires: deterministic lifecycle state, display status which a model may narrow, and notification_status which is deterministic-only and is the sole field the notifier reads. assessment.schema.json remains the model-produced contract and is embedded here unchanged, so the advisory-mode boundary is expressible and testable rather than conventional. Every field is capped so a serialized instance is finite.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "session_id", "run_id", "execution_epoch", "state", "status", "notification_status", "status_epoch", "attention_epoch", "needs_attention", "active_signals", "signal_fingerprint", "model_assessment", "report", "event_cursor", "reconciled_at"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "session_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "run_id": {
+      "description": "Identifier of the execution this result describes, or null when no execution is bound.",
+      "type": ["string", "null"],
+      "maxLength": 128
+    },
+    "execution_epoch": {
+      "description": "Zero-based ordinal of the execution within the session. Increments when a resume binds the same session ID.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "state": {
+      "description": "Deterministic lifecycle, owned by session discovery and process evidence. Never model-assigned.",
+      "enum": ["active_turn", "between_turns", "waiting", "terminal_completed", "terminal_failed", "idle", "identity_broken", "unknown"]
+    },
+    "status": {
+      "description": "Display status. A model may narrow this within the row its state permits; it may never move it to another row.",
+      "enum": ["progressing", "investigating", "between_turns", "waiting", "stalled", "looping", "off_scope", "terminal_completed", "terminal_failed", "idle", "unknown"]
+    },
+    "notification_status": {
+      "description": "Delivery-authoritative status, derived only from deterministic lifecycle and rule signals. The notifier reads this and nothing else. In advisory mode no model output can reach it.",
+      "enum": ["progressing", "between_turns", "waiting", "stalled", "looping", "off_scope", "terminal_completed", "terminal_failed", "idle", "identity_broken", "unknown"]
+    },
+    "status_epoch": {
+      "description": "Increments whenever notification_status changes to a different value, making each entry into a state a distinct episode.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "attention_epoch": {
+      "description": "Increments on every deterministic needs_attention transition from false to true, so a signal that clears and reactivates is a new episode even when notification_status never changed.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "needs_attention": {
+      "description": "Deterministic. A model may not set or clear it.",
+      "type": "boolean"
+    },
+    "active_signals": {
+      "description": "Deterministic signal identities active at reconciliation, the input to signal_fingerprint.",
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "severity"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "kind": { "enum": ["repeated_command", "recurring_error", "stagnation", "scope_expansion", "forbidden_path", "waiting", "turn_failed", "process_failed", "test_regression", "context_growth", "agentlens_finding", "dependency_unavailable", "other"] },
+          "severity": { "enum": ["info", "warning", "critical"] }
+        }
+      }
+    },
+    "signal_fingerprint": {
+      "description": "Stable digest of the sorted (severity, kind, id) triples in active_signals. Part of the notification deduplication key.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "model_assessment": {
+      "description": "The model result, unchanged, or null when none was produced or it was rejected. Advisory in v0.1.0: present here for display and context, never consulted for delivery.",
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "assessment.schema.json" }
+      ]
+    },
+    "report": {
+      "description": "Run report state, or null when no report is due.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["report_version", "provisional", "supersedes"],
+          "properties": {
+            "report_version": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "provisional": {
+              "description": "True for an idle report, where no process evidence exists. An execution-terminal report is final for its execution and still supersedable by a resume.",
+              "type": "boolean"
+            },
+            "supersedes": { "type": ["integer", "null"], "minimum": 1, "maximum": 100000 }
+          }
+        }
+      ]
+    },
+    "event_cursor": { "type": ["integer", "null"], "minimum": 0, "maximum": 1000000000 },
+    "reconciled_at": { "type": "string", "format": "date-time", "maxLength": 40 }
+  }
+}

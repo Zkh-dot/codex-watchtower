@@ -110,11 +110,12 @@
 - Create: `tests/schemas/test_schemas.py`
 - Create: `tests/fixtures/observations/healthy.json`
 - Create: `tests/fixtures/assessments/healthy.json`
+- Create: `tests/fixtures/reconciled/healthy.json`
 - Modify: `pyproject.toml`
 
 **Steps:**
 
-1. Write tests loading all three schemas and validating healthy examples.
+1. Write tests loading all four schemas and validating healthy examples.
 2. Add one deliberately invalid in-test assessment and assert validation failure.
 3. Assert `assessment.wire.schema.json` stays aligned with `assessment.schema.json`: identical property sets, enum members, and nullability at every level, `additionalProperties: false` and fully populated `required` everywhere, and no strict-mode-rejected keyword present.
 4. Assert every payload valid under the authoritative schema is also valid under the wire schema, so the projection can only be more permissive.
@@ -525,16 +526,19 @@
 - Create: `src/codex_watchtower/assess/terra.py`
 - Create: `src/codex_watchtower/assess/policy.py`
 - Create: `tests/unit/assess/test_policy.py`
+- Create: `tests/unit/assess/test_reconciled_schema.py`
 
 **Steps:**
 
 1. Parametrize every escalation trigger from the specification, keeping `goal_alignment` and `status` triggers distinct.
 2. Verify healthy Luna results do not call Terra, and that confidence alone never triggers escalation.
-3. Verify advisory mode structurally: the reconciler emits `state`, `status`, and `notification_status`; only the first and third are derivable without model output, and no model-narrowed status reaches the notifier.
-4. Verify deterministic critical signals force attention despite reassuring model output.
-5. Verify Terra prose supersedes Luna only when valid.
-6. Verify timeout falls back to deterministic assessment.
-7. Commit: `feat: add terra escalation policy`.
+3. Verify advisory mode structurally against `schemas/reconciled_assessment.schema.json`: the reconciler emits `state`, `status`, and `notification_status`; only the first and third are derivable without model output, and no model-narrowed status reaches the notifier. Assert the reconciled result validates and that `assessment.schema.json` alone cannot represent it, so the boundary stays a contract rather than a convention.
+4. Test that a reconciled result with `model_assessment: null` is valid and fully populated, which is the rule-only and budget-exhausted path.
+5. Verify deterministic critical signals force attention despite reassuring model output.
+6. Verify Terra prose supersedes Luna only when valid.
+7. Verify timeout falls back to deterministic assessment.
+8. Verify both epochs: `status_epoch` advances only on a `notification_status` change, `attention_epoch` only on a deterministic `needs_attention` false-to-true transition, and neither is advanced by model output.
+9. Commit: `feat: add terra escalation policy`.
 
 ### Task 23: Schedule assessments by evidence change
 
@@ -568,7 +572,7 @@
 **Steps:**
 
 1. Write failing tests for all specified endpoints.
-2. Implement pagination over the per-session event sequence and JSON schema-compatible responses; assert no route exposes a tailer file cursor.
+2. Implement pagination over the per-session event sequence, and return session and assessment routes as `reconciled_assessment.schema.json` payloads; assert no route exposes a tailer file cursor.
 3. Implement SSE state transitions with reconnect cursor support.
 4. Assert the default bind is `127.0.0.1`.
 5. Disable POST assessment unless an operator token is configured; test bearer auth, strict Origin/Host checks, no wildcard CORS, idempotency, rate/cost budgets, and concurrency limits.
@@ -612,12 +616,13 @@
 2. Test transition policy and `signal_fingerprint` over `(severity, kind, signal_id)` triples taken from the rule engine, not from assessment concerns.
 3. Test the advisory guarantee: Luna reporting `looping` with no corresponding rule signal changes the displayed status and message body but sends nothing.
 4. Test `status_epoch`: a `waiting -> active_turn -> waiting` cycle sends twice, while repeats inside one episode send once.
-5. Test changed prose with identical evidence is suppressed.
-6. Test that an advanced event cursor alone does not change the deduplication key, and that a restart replaying the same window sends nothing.
-7. Test the critical-signal cooldown resend and the digest path.
-8. Test critical evidence always includes a factual reason and event cursor in the body.
-9. Apply trusted-remote redaction, path minimization, Telegram markup escaping, `chat_id` allowlisting, and omission of prompts/output/local links.
-10. Commit: `feat: render deduplicated operator notifications`.
+5. Test `attention_epoch`: a signal that activates, clears, and reactivates while `notification_status` stays `progressing` sends twice, since each is a distinct `needs_attention` false-to-true transition. This is the case `status_epoch` alone does not cover.
+6. Test changed prose with identical evidence is suppressed.
+7. Test that an advanced event cursor alone does not change the deduplication key, and that a restart replaying the same window sends nothing.
+8. Test the critical-signal cooldown resend and the digest path.
+9. Test critical evidence always includes a factual reason and event cursor in the body.
+10. Apply trusted-remote redaction, path minimization, Telegram markup escaping, `chat_id` allowlisting, and omission of prompts/output/local links.
+11. Commit: `feat: render deduplicated operator notifications`.
 
 ### Task 27: Add Telegram Bot API notifier
 
