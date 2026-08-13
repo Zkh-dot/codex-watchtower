@@ -85,3 +85,30 @@ state database, run a scan for accidentally-retained secret material. The
 seeded-secret regression tests (`tests/unit/privacy/test_redact.py`) are
 the source of truth for which patterns Watchtower recognizes; treat that
 suite, not a one-off manual grep, as the acceptance gate.
+
+## Internal observability
+
+Watchtower emits structured logs and Prometheus-compatible counters
+(spec section 9) through `codex_watchtower.telemetry.Telemetry`. The
+cardinal rule is that **no transcript content is exported through
+metrics**: metric labels are drawn only from fixed enum values, session
+ids, signal kinds/severities, and outcome categories, never from event
+summaries, model output, command text, or file paths. Structured-log
+fields may carry a bounded `session_id` and outcome, but any free-form
+payload is run through the same `privacy.redact` redactor the ingestion
+path uses before it reaches a log record.
+
+The telemetry sink exposes:
+
+- **Counters:** sessions observed, events ingested/rejected, unknown
+  Codex event types, AgentLens availability, model call
+  count/failures/escalations, notifications sent/deduplicated/failed,
+  cursor recovery outcomes, and cumulative parser lag.
+- **Histograms:** model-call latency (seconds) and input-packet size
+  (characters), with cumulative bucket counts matching Prometheus
+  semantics. No individual sample or raw packet content is exported --
+  only aggregate bucket counts and totals.
+
+`watchtower doctor` does not require telemetry to be configured; the
+no-op default keeps the service fully functional without a logger
+attached.

@@ -25,6 +25,7 @@ from codex_watchtower.rules.repetition import detect_recurring_errors, detect_re
 from codex_watchtower.rules.scope import detect_scope_violations
 from codex_watchtower.rules.tests import detect_test_regression
 from codex_watchtower.storage.repository import Repository, SourceLocator
+from codex_watchtower.telemetry import Telemetry
 
 
 def _parse_ts(ts: str) -> datetime:
@@ -90,12 +91,14 @@ class IngestionService:
         quiet_grace_period: timedelta = lifecycle.DEFAULT_QUIET_GRACE_PERIOD,
         enforce_file_safety: bool = False,
         expected_uid: int | None = None,
+        telemetry: Telemetry | None = None,
     ) -> None:
         self.sessions_root = sessions_root
         self.repo = repo
         self.quiet_grace_period = quiet_grace_period
         self.enforce_file_safety = enforce_file_safety
         self.expected_uid = expected_uid
+        self.telemetry = telemetry or Telemetry()
 
     def poll_once(self, now: datetime | None = None) -> None:
         now = now or datetime.now(UTC)
@@ -105,6 +108,7 @@ class IngestionService:
     def _ingest_session(self, discovered: DiscoveredSession, now: datetime) -> None:
         session_id = discovered.session_id
         path = discovered.path
+        self.telemetry.session_observed(session_id)
         existing = self.repo.get_session(session_id)
         if existing is None:
             self.repo.upsert_session(
@@ -125,9 +129,12 @@ class IngestionService:
         cursor = self.repo.get_cursor(session_id)
         resolved = resolve_start(path, cursor)
         if isinstance(resolved, IdentityBroken):
+            self.telemetry.cursor_recovery(session_id, "identity_broken")
             state = lifecycle.mark_identity_broken(state, detail=resolved.detail, now=now)
             _persist_lifecycle(self.repo, state)
             return
+
+        self.telemetry.cursor_recovery(session_id, "resumed" if cursor else "fresh")
 
         sessions_root = self.sessions_root if self.enforce_file_safety else None
         read_result = read_new_records(
@@ -139,7 +146,11 @@ class IngestionService:
         for raw in read_result.records:
             normalized = normalize_record(session_id, raw, fallback_timestamp=now.isoformat())
             if normalized is None:
+                self.telemetry.event_rejected(session_id, "unmappable_type")
                 continue
+            if normalized.event.kind == domain.EventKind.unknown:
+                wire_type = raw.parsed.get("type", "unknown") if raw.parsed else "unknown"
+                self.telemetry.unknown_event_type(session_id, str(wire_type))
             locator = SourceLocator(
                 device=raw.locator.device,
                 inode=raw.locator.inode,
@@ -162,6 +173,9 @@ class IngestionService:
             )
             if inserted.inserted:
                 new_events.append(normalized.event)
+                self.telemetry.event_ingested(session_id)
+            else:
+                self.telemetry.event_rejected(session_id, "duplicate")
 
         if new_events:
             state = lifecycle.on_new_events(state, new_events, now)

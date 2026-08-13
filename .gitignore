@@ -28,3 +28,5 @@ logs/
 !tests/fixtures/**/*.jsonl
 !spikes/**/*.jsonl
 .cctrace/
+working.md
+working.dm

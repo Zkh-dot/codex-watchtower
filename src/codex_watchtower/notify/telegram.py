@@ -20,6 +20,8 @@ from datetime import datetime, timedelta
 
 import httpx
 
+from codex_watchtower.telemetry import Telemetry
+
 DEFAULT_MAX_RETRIES = 5
 DEFAULT_BASE_BACKOFF_SECONDS = 2.0
 DEFAULT_MAX_BACKOFF_SECONDS = 300.0
@@ -140,18 +142,23 @@ def process_delivery(
     *,
     now: datetime,
     max_retries: int = DEFAULT_MAX_RETRIES,
+    telemetry: Telemetry | None = None,
 ) -> DeliveryOutcome:
     if pending.next_retry_at is not None and now < pending.next_retry_at:
         return DeliveryOutcome(delivered=False, gave_up=False, pending=pending)
 
     result = notifier.send(pending.chat_id, pending.text)
+    tel = telemetry or Telemetry()
     if result.delivered:
+        tel.notification_sent("telegram")
         return DeliveryOutcome(delivered=True, gave_up=False, pending=None)
 
     if result.permanent_failure:
+        tel.notification_failed("telegram", result.error or "permanent")
         return DeliveryOutcome(delivered=False, gave_up=True, pending=None)
 
     if pending.attempt + 1 >= max_retries:
+        tel.notification_failed("telegram", "max_retries")
         return DeliveryOutcome(delivered=False, gave_up=True, pending=None)
 
     backoff = compute_backoff_seconds(pending.attempt, retry_after=result.retry_after_seconds)
