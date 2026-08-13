@@ -242,20 +242,35 @@ Limits:
 - command outputs reduced to relevant head/tail excerpts plus exit status;
 - no full source file contents by default.
 
-The budget covers the whole request because every excluded field is attacker- or user-controlled and unbounded in practice. A single pasted goal, a previous assessment at its own maxima, or an unbounded signal payload could each exceed the context and cost limit before eviction began. Every contributing field therefore carries its own cap in the schema, so a maximum-sized request is finite and computable:
+The budget covers the whole request because every excluded field is attacker- or user-controlled and unbounded in practice. A single pasted goal, a previous assessment at its own maxima, or an unbounded signal payload could each exceed the context and cost limit before eviction began.
+
+Two separate guarantees are involved, and conflating them produced an unsatisfiable requirement in an earlier draft:
+
+**Schema bound — finiteness.** Every serializable string, collection, and numeric in the observation and assessment contracts carries an explicit cap, so the largest schema-valid request is finite and computable. It is not small: at the caps below the theoretical maximum is approximately **5.1 million characters**, dominated by 200 events and 64 signals. Finiteness is what the schema guarantees; it does not and cannot guarantee the runtime budget, since 200 events at 4,000 characters exceed 48,000 on their own.
 
 | Field | Cap |
 | --- | --- |
+| `session.id`, `session.model` | 200 characters |
+| `session.workspace`, `event.path` | 512 characters |
+| all timestamps | 40 characters |
+| all identifiers (`event.id`, `signal.id`, evidence refs, `basis_ids` items) | 128 characters |
 | `goal.text` | 8,000 characters |
 | `goal.acceptance_criteria` | 32 items x 500 characters |
 | `goal.expected_paths`, `goal.forbidden_paths` | 64 items x 512 characters each |
 | `events` | 200 items x 4,000 characters |
-| `signals` | 64 items, summary 1,000 characters, `payload` 24 scalar entries x 500 characters |
+| `signals` | 64 items; `event_ids` 64 x 128; `payload` 24 scalar entries x 500 |
 | `system_refs` | 32 items x 1,000 characters |
 | `redactions` | 32 items x 100 characters |
-| `previous_assessment` | bounded by `assessment.schema.json` |
+| `basis_ids`, `evidence`, `concerns[].evidence_refs` | 12 items each |
+| cursors and counters | explicit `maximum` |
 
-`signal.payload` is a bounded scalar map rather than a free-form object; nested structure is rendered into the summary instead. `used_characters` is measured on the final serialized request, not on the packet in isolation, and `used_characters <= budget_characters` is a domain invariant enforced in §5.3 validation, since JSON Schema cannot express a cross-field comparison.
+**Runtime bound — the 48,000 budget.** This is enforced by the packet builder, not by the schema. The builder serializes canonically, measures, evicts in the fixed order below, and re-measures. If the result still exceeds the budget, it fails closed to a rule-only assessment and makes no model call. No request larger than the budget is ever sent, and that property is what the tests must demonstrate.
+
+`signal.payload` is a bounded scalar map rather than a free-form object; nested structure is rendered into the summary instead. Floating-point values are excluded from payloads entirely, because JSON gives a float no serialization-length bound: a ratio must be rendered as a bounded string or a bounded integer.
+
+`confidence` is the single float in either contract. It is bounded by the **canonical serialization rule**: the builder emits JSON from validated domain objects and never passes provider text through, so a float is re-serialized from a parsed double and occupies at most 24 characters regardless of how many digits arrived.
+
+`used_characters` is measured on the final serialized request, not on the packet in isolation, and `used_characters <= budget_characters` is a domain invariant enforced in §5.3 validation, since JSON Schema cannot express a cross-field comparison.
 
 The per-event and per-packet caps multiply to roughly 800,000 characters, so the event cap alone bounds nothing useful. The total budget is authoritative and the per-field caps are secondary guards. When the budget is exceeded, the builder evicts in a fixed order and records what it dropped:
 

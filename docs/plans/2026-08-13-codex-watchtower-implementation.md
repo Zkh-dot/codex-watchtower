@@ -461,13 +461,16 @@
 1. Test first packet with no prior assessment.
 2. Test subsequent packet starts after the prior cursor.
 3. Test event/item/character limits and the total budget measured on the final serialized provider request, not on the packet alone.
-4. Negative tests for the previously unbounded inputs: a goal at and beyond `maxLength`, a previous assessment at its own maxima, a signal payload at `maxProperties`, and a maximum-sized request whose computed worst case must still fit the budget.
-5. Test the documented eviction order, that signals are never evicted, that goal text truncates only after all event classes, and that a packet whose signals and goal exceed the budget fails closed to a rule-only assessment.
-6. Test that `truncation` counts are populated on eviction and zeroed on a complete window.
-7. Test that `system_refs` carries every citable non-event fact and that a `sys:` ID absent from the packet is rejected downstream.
-8. Test overflow folding and no source-file bodies by default.
-9. Validate generated packets against `observation.schema.json`.
-10. Commit: `feat: build bounded observation packets`.
+4. Prove finiteness structurally: walk both schemas and assert every string has `maxLength`, every array `maxItems`, every numeric `maximum`, and every object with `additionalProperties` a `maxProperties`. This test fails when a future field is added without a cap, which is how the previous gap appeared.
+5. Compute the theoretical worst-case serialized request from the schema caps and assert it is finite. Do not assert it fits the budget: 200 events at 4,000 characters already exceed 48,000, so that assertion is unsatisfiable by construction.
+6. Prove the runtime bound instead: build a request from maximal inputs (goal at `maxLength`, a previous assessment at its own maxima, 200 maximal events, 64 maximal signals with payloads at `maxProperties`) and assert the builder either emits `serialized_size <= 48_000` after eviction or fails closed to a rule-only assessment with no model call. Assert on the bytes handed to the transport, including prompt scaffolding.
+7. Test the canonical serialization rule: a confidence value arriving with excessive precision is re-serialized from a parsed double at 24 characters or fewer, and no provider text is passed through verbatim.
+8. Test the documented eviction order, that signals are never evicted, that goal text truncates only after all event classes, and that a packet whose signals and goal exceed the budget fails closed to a rule-only assessment.
+9. Test that `truncation` counts are populated on eviction and zeroed on a complete window.
+10. Test that `system_refs` carries every citable non-event fact and that a `sys:` ID absent from the packet is rejected downstream.
+11. Test overflow folding and no source-file bodies by default.
+12. Validate generated packets against `observation.schema.json`.
+13. Commit: `feat: build bounded observation packets`.
 
 ## Phase 6: Luna/Terra assessment cascade
 

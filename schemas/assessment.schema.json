@@ -4,24 +4,73 @@
   "title": "WatchtowerAssessment",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "status", "current_action", "goal_alignment", "evidence", "basis_ids", "concerns", "needs_attention", "recommended_human_action", "confidence", "assessed_by", "escalation_reason", "event_cursor", "assessed_at"],
+  "required": [
+    "schema_version",
+    "status",
+    "current_action",
+    "goal_alignment",
+    "evidence",
+    "basis_ids",
+    "concerns",
+    "needs_attention",
+    "recommended_human_action",
+    "confidence",
+    "assessed_by",
+    "escalation_reason",
+    "event_cursor",
+    "assessed_at"
+  ],
   "properties": {
-    "schema_version": { "const": "1.0" },
-    "status": { "enum": ["progressing", "investigating", "between_turns", "waiting", "stalled", "looping", "off_scope", "terminal_completed", "terminal_failed", "idle", "unknown"] },
-    "current_action": { "type": "string", "minLength": 1, "maxLength": 500 },
-    "goal_alignment": { "enum": ["aligned", "possibly_aligned", "misaligned", "unknown"] },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "status": {
+      "enum": [
+        "progressing",
+        "investigating",
+        "between_turns",
+        "waiting",
+        "stalled",
+        "looping",
+        "off_scope",
+        "terminal_completed",
+        "terminal_failed",
+        "idle",
+        "unknown"
+      ]
+    },
+    "current_action": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "goal_alignment": {
+      "enum": [
+        "aligned",
+        "possibly_aligned",
+        "misaligned",
+        "unknown"
+      ]
+    },
     "evidence": {
       "type": "array",
       "minItems": 1,
       "maxItems": 12,
-      "items": { "$ref": "#/$defs/evidence" }
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
     },
     "basis_ids": {
       "description": "Evidence refs supporting status, current_action, and goal_alignment; validated semantically against evidence[].ref_id.",
       "type": "array",
       "minItems": 1,
-      "items": { "type": "string", "minLength": 1 },
-      "uniqueItems": true
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "uniqueItems": true,
+      "maxItems": 12
     },
     "concerns": {
       "type": "array",
@@ -29,32 +78,125 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["severity", "kind", "explanation", "evidence_refs"],
+        "required": [
+          "severity",
+          "kind",
+          "explanation",
+          "evidence_refs"
+        ],
         "properties": {
-          "severity": { "enum": ["info", "warning", "critical"] },
-          "kind": { "enum": ["loop", "stagnation", "scope", "tests", "errors", "waiting", "resource", "uncertainty", "infrastructure", "other"] },
-          "explanation": { "type": "string", "minLength": 1, "maxLength": 1000 },
-          "evidence_refs": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+          "severity": {
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "loop",
+              "stagnation",
+              "scope",
+              "tests",
+              "errors",
+              "waiting",
+              "resource",
+              "uncertainty",
+              "infrastructure",
+              "other"
+            ]
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "evidence_refs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "uniqueItems": true,
+            "maxItems": 12
+          }
         }
       }
     },
-    "needs_attention": { "type": "boolean" },
-    "recommended_human_action": { "type": ["string", "null"], "maxLength": 1000 },
-    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-    "assessed_by": { "enum": ["luna", "terra", "rules"] },
-    "escalation_reason": { "type": ["string", "null"], "maxLength": 500 },
-    "event_cursor": { "description": "Per-session event sequence value the assessment was made at, not a tailer file cursor.", "type": ["integer", "null"], "minimum": 0 },
-    "assessed_at": { "type": "string", "format": "date-time" }
+    "needs_attention": {
+      "type": "boolean"
+    },
+    "recommended_human_action": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 1000
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Serialized canonically from a validated double, so its serialized form is bounded at 24 characters; see the canonical serialization rule in the specification."
+    },
+    "assessed_by": {
+      "enum": [
+        "luna",
+        "terra",
+        "rules"
+      ]
+    },
+    "escalation_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 500
+    },
+    "event_cursor": {
+      "description": "Per-session event sequence value the assessment was made at, not a tailer file cursor.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1000000000
+    },
+    "assessed_at": {
+      "type": "string",
+      "format": "date-time",
+      "maxLength": 40
+    }
   },
   "$defs": {
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["ref_type", "ref_id", "claim"],
+      "required": [
+        "ref_type",
+        "ref_id",
+        "claim"
+      ],
       "properties": {
-        "ref_type": { "enum": ["event", "signal", "system"] },
-        "ref_id": { "type": "string", "minLength": 1 },
-        "claim": { "type": "string", "minLength": 1, "maxLength": 500 }
+        "ref_type": {
+          "enum": [
+            "event",
+            "signal",
+            "system"
+          ]
+        },
+        "ref_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "claim": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
       }
     }
   }
