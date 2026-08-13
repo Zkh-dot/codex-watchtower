@@ -1,6 +1,6 @@
 # Codex Watchtower
 
-A design and implementation plan for a local-first observer of autonomous OpenAI Codex CLI runs.
+A local-first observer of autonomous OpenAI Codex CLI runs.
 
 Watchtower combines:
 
@@ -10,13 +10,35 @@ Watchtower combines:
 - a stronger **Terra** model only when evidence is ambiguous or unhealthy;
 - optional Telegram delivery when state changes or human attention is required.
 
-The project is documentation-first. No runtime implementation has been committed yet.
+## Quick start
+
+```bash
+# Install
+uv sync
+
+# Verify
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+uv run pytest -q
+
+# Run the doctor check
+uv run watchtower doctor
+
+# Start watching sessions
+uv run watchtower watch --sessions-root ~/.codex/sessions
+```
 
 ## Documents
 
 - [Architecture specification](docs/specs/2026-08-13-codex-watchtower-design.md)
 - [Implementation plan](docs/plans/2026-08-13-codex-watchtower-implementation.md)
 - [Verified references and research notes](docs/references/references.md)
+- [Operations guide](docs/operations.md)
+- [Acceptance checklist](docs/release/acceptance-checklist.md)
+- [Threat model](docs/release/threat-model.md)
+- [Corpus format](docs/evaluation/corpus-format.md)
+- [Calibration report template](docs/evaluation/report-template.md)
 - [Normalized observation schema](schemas/observation.schema.json)
 - [Model assessment schema](schemas/assessment.schema.json)
 - [Provider-facing wire projection of the assessment schema](schemas/assessment.wire.schema.json)
@@ -56,9 +78,45 @@ The first usable version will:
 
 ## Status
 
-Draft architecture and execution plan pending integration spikes and implementation validation. No runtime implementation has started.
+v0.1.0 is implemented in advisory mode: deterministic rules are
+authoritative and notify on their own, and model assessments are
+displayed without influencing any notification decision. All 11 MVP
+acceptance criteria are met with evidence (see the [acceptance
+checklist](docs/release/acceptance-checklist.md)). Model output is
+promoted to a notification input in v0.2.0, once the frozen calibration
+corpus and its gates exist.
 
-v0.1.0 is planned in advisory mode: deterministic rules are authoritative and notify on their own, and model assessments are displayed without influencing any notification decision. Model output is promoted to a notification input in v0.2.0, once the frozen calibration corpus and its gates exist.
+### Implemented
+
+- Date-partitioned session discovery and incremental, restart-safe tailing
+- Content-addressed exactly-once event ingestion (SHA-256 logical event IDs)
+- Deterministic rule engine: repeated commands, recurring errors,
+  stagnation, scope/forbidden-path violations, test regression
+- Session lifecycle: idle timeout, process exit, resume with
+  execution-epoch advancement, report version chains
+- Version-gated AgentLens MCP adapter (degrades gracefully when absent)
+- Provider-neutral structured model client with bounded response reads
+- Luna/Terra assessment cascade with escalation conditions
+- Observation packet builder with redaction and truncation budgets
+- Reconciliation policy: deterministic signals are authoritative
+- Telegram notifier with durable retry, dedup, and rate-limit backoff
+- Local FastAPI JSON/HTTP API with SSE stream
+- Structured telemetry (counters + histograms) with no transcript
+  content in metrics
+- Redacted rollout fixture tooling (`tools/redact_rollout.py`)
+- Evaluation metrics (macro-F1, attention, citation, latency, tokens)
+- Two-hour accelerated replay e2e tests
+- Degraded-dependency e2e tests
+
+### Known limitations
+
+1. No real Codex rollout corpus has been ingested; all tests use
+   synthetic fixtures.
+2. No frozen labeled evaluation corpus exists; calibration gates v0.2.0
+   are not yet met.
+3. Model output is advisory only; no notification depends on it.
+4. Telegram delivery is tested against mock endpoints.
+5. AgentLens integration is tested against synthetic fixtures.
 
 ## License
 
