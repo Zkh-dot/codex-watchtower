@@ -137,7 +137,7 @@
 
 1. Write tests for enum values, `confidence_percent` integer bounds, unique evidence references, and schema serialization.
 2. Implement Pydantic models matching the committed JSON Schemas.
-3. Enforce RFC 3339 timestamps, `opened_at <= closed_at`, cursor consistency, unique/monotonic event IDs and timestamps, events inside the window, `used_characters <= budget_characters`, and assessment references resolving to packet event, signal, or `system_refs` IDs.
+3. Enforce every domain invariant listed in §5.3, one test each: timestamps and window containment, unique/monotonic event IDs and sequences, `opened_at <= closed_at`, `from_cursor < to_cursor`, `used_characters <= budget_characters`, `signal.event_ids` resolving to packet events, evidence refs resolving to packet event/signal/`system_refs` IDs, `basis_ids` resolving to `evidence[].ref_id`, `supersedes < report_version`, and `run_id`/`execution_epoch` being null or set together.
 4. Test the session-state to assessment-status projection: each state permits only its documented statuses, and a model narrowing within `active_turn` is accepted while a cross-row move is rejected.
 5. Verify serialized fixtures with `jsonschema[format]` and `FormatChecker`.
 6. Commit: `feat: add typed watchtower domain model`.

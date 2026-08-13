@@ -179,7 +179,20 @@ The normalizer converts version-specific Codex records into `WatchtowerEvent` va
 
 Turn and process lifecycle are separate kinds, not one `lifecycle` kind. §5.8 and §5.11 depend on the distinction: a turn boundary comes from the transcript and can only produce `between_turns`, while a process boundary comes from outside it and is the only thing that can produce a confirmed terminal state.
 
-Each event has a stable ID, timestamp, short factual summary, source type, and optional path/exit code. It must not ask a model to parse events that can be parsed deterministically. Domain validation additionally enforces RFC 3339 timestamps, unique and monotonic event IDs/times, `opened_at <= closed_at`, cursor consistency, event timestamps within the declared window, and `used_characters <= budget_characters` measured on the final serialized request; JSON Schema alone cannot express all of these invariants.
+Each event has a stable ID, timestamp, short factual summary, source type, and optional path/exit code. It must not ask a model to parse events that can be parsed deterministically.
+
+Some invariants are cross-field or cross-collection and cannot be written in JSON Schema. These are enforced in domain validation, and each carries a test rather than an assumption:
+
+- RFC 3339 timestamps, and event timestamps inside the declared window;
+- unique and monotonic event IDs and event sequence values;
+- `opened_at <= closed_at` and `from_cursor < to_cursor`;
+- `used_characters <= budget_characters`, measured on the final serialized request;
+- every `signal.event_ids` entry resolving to an event present in the same packet;
+- every assessment evidence `ref_id` resolving to a packet event, signal, or `system_refs` ID, and every `basis_ids` entry resolving to an `evidence[].ref_id`;
+- `report.supersedes < report.report_version`, with a report chain that never reuses or decreases a version;
+- `execution_epoch` and `run_id` either both null or both set.
+
+The rule is that a guarantee stated in the specification is either expressible in a committed schema and encoded there, or listed here with a test. It is not left to prose.
 
 ### 5.4 AgentLens adapter
 
