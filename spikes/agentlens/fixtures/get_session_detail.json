@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"session_id\": \"rollout-2026-08-13T10-00-00-abc123\", \"prompt_tokens\": 4200, \"completion_tokens\": 1100, \"context_tokens\": 5300, \"context_limit\": 128000, \"timeline\": [], \"tool_counts\": {}, \"files\": []}"
+      }
+    ]
+  }
+}
