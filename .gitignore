@@ -10,6 +10,9 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
+dist/
+build/
 
 # Runtime state and secrets
 *.db
@@ -20,6 +23,8 @@ config.toml
 state/
 logs/
 
-# Local research and transcripts
+# Local research and transcripts (real session data, never fixtures)
 *.jsonl
+!tests/fixtures/**/*.jsonl
+!spikes/**/*.jsonl
 .cctrace/

@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "session_id": "sess-1",
+  "run_id": "run-1",
+  "execution_epoch": 0,
+  "state": "active_turn",
+  "status": "progressing",
+  "notification_status": "progressing",
+  "status_epoch": 1,
+  "attention_epoch": 0,
+  "fatal": null,
+  "needs_attention": false,
+  "active_signals": [],
+  "signal_fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "model_assessment": null,
+  "report": null,
+  "event_cursor": 5,
+  "reconciled_at": "2026-08-13T10:02:00Z"
+}
