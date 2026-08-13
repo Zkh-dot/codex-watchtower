@@ -59,10 +59,11 @@
 **Steps:**
 
 1. Resolve deployment-specific Luna/Terra identifiers and structured-output support.
-2. Smoke one schema-valid request per profile after explicit operator approval.
-3. Verify HTTPS certificate validation, redirect rejection, endpoint allowlisting, disabled proxy inheritance, response-size cap, retry budget, and provider retention/logging policy.
-4. Record latency and cost without storing prompts or credentials.
-5. Commit: `spike: verify assessment model contracts`.
+2. Verify keyword support explicitly rather than structured-output support in general: submit `schemas/assessment.schema.json` unmodified, record which of `const`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `minItems`, `maxItems`, `uniqueItems`, `oneOf`, and external `$ref` are rejected, then confirm `schemas/assessment.wire.schema.json` is accepted. Discovering this in Phase 6 instead forces a schema rewrite mid-cascade.
+3. Smoke one schema-valid request per profile after explicit operator approval.
+4. Verify HTTPS certificate validation, redirect rejection, endpoint allowlisting, disabled proxy inheritance, response-size cap, retry budget, and provider retention/logging policy.
+5. Record latency and cost without storing prompts or credentials.
+6. Commit: `spike: verify assessment model contracts`.
 
 ## Phase 0: Repository and quality gates
 
@@ -112,10 +113,12 @@
 
 **Steps:**
 
-1. Write tests loading both schemas and validating healthy examples.
+1. Write tests loading all three schemas and validating healthy examples.
 2. Add one deliberately invalid in-test assessment and assert validation failure.
-3. Run the focused tests; verify red before fixture/schema wiring and green after.
-4. Commit: `test: enforce observation and assessment schemas`.
+3. Assert `assessment.wire.schema.json` stays aligned with `assessment.schema.json`: identical property sets, enum members, and nullability at every level, `additionalProperties: false` and fully populated `required` everywhere, and no strict-mode-rejected keyword present.
+4. Assert every payload valid under the authoritative schema is also valid under the wire schema, so the projection can only be more permissive.
+5. Run the focused tests; verify red before fixture/schema wiring and green after.
+6. Commit: `test: enforce observation and assessment schemas`.
 
 ## Phase 1: Domain model and durable state
 
@@ -469,10 +472,11 @@
 **Steps:**
 
 1. Define `assess(model_profile, observation, schema)` interface.
-2. Test OpenAI-compatible structured-output request construction with `respx`.
-3. Test timeout, invalid JSON, schema mismatch, and retry classification.
-4. Ensure no tools are supplied to the assessment model.
-5. Commit: `feat: add structured model assessment client`.
+2. Test OpenAI-compatible structured-output request construction with `respx`, asserting the request carries the wire schema and never the authoritative one.
+3. Test that a response valid under the wire schema but violating an authoritative bound is rejected and takes the retry path.
+4. Test timeout, invalid JSON, schema mismatch, and retry classification.
+5. Ensure no tools are supplied to the assessment model.
+6. Commit: `feat: add structured model assessment client`.
 
 ### Task 21: Implement Luna assessment
 

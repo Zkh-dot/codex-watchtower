@@ -234,7 +234,14 @@ Model spend is bounded independently of packet size. Configuration sets a per-se
 
 ### 5.7 Model assessors
 
-Both assessors return `schemas/assessment.schema.json` using structured output.
+Both assessors return an assessment via structured output, using two schema artifacts:
+
+- `schemas/assessment.wire.schema.json` is sent to the provider. Strict structured-output modes reject `const`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `minItems`, `maxItems`, `uniqueItems`, `oneOf`, and external `$ref`, which covers most of the constraint surface of the authoritative schema. The wire projection drops those keywords, sets `additionalProperties: false`, lists every property in `required`, and carries the removed bounds as prose in `description` so the model still sees them.
+- `schemas/assessment.schema.json` remains authoritative. Every response is validated against it after parsing; a response that satisfies the wire schema but violates a bound is invalid and takes the retry path in §5.8.
+
+Nothing is relaxed by this split. The wire schema is a projection, not a second contract: CI regenerates it from the authoritative schema and fails when the two diverge in shape, enum membership, or nullability.
+
+The observation packet is passed as request content, not as a provider-side schema, so it is unaffected.
 
 #### Luna
 
