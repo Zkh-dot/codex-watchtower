@@ -194,15 +194,16 @@ CREATE INDEX IF NOT EXISTS idx_deliveries_session
 -- next_retry_at, and message text are persisted here so the next poll
 -- resumes from the correct retry state instead of starting from attempt 0.
 CREATE TABLE IF NOT EXISTS pending_deliveries (
-    dedup_key TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions (session_id),
+    dedup_key TEXT NOT NULL,
     chat_id TEXT NOT NULL,
+    session_id TEXT NOT NULL REFERENCES sessions (session_id),
     text TEXT NOT NULL,
     attempt INTEGER NOT NULL DEFAULT 0,
     next_retry_at TEXT,
     failed INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (dedup_key, chat_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_pending_deliveries_session

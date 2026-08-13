@@ -151,50 +151,71 @@ def _lifecycle_state_from_row(session_id: str, row: Any) -> lifecycle.LifecycleS
     )
 
 
-def _check_budget(
-    repo: Repository,
-    session_id: str,
-    budget: BudgetConfig,
-) -> str | None:
-    """Return a failure reason if the budget is exhausted, else None."""
-    if budget.per_session_assessment_ceiling is not None:
-        count = repo.count_model_calls_for_session(session_id)
-        if count >= budget.per_session_assessment_ceiling:
-            return "per_session_ceiling_exhausted"
-    if budget.daily_cost_ceiling_cents is not None:
-        today = datetime.now(UTC).strftime("%Y-%m-%d")
-        spent = repo.sum_daily_cost_cents(today)
-        if spent >= budget.daily_cost_ceiling_cents:
-            return "daily_cost_ceiling_exhausted"
-    return None
+def _estimate_cost_cents(input_characters: int, assessed_by: str) -> int:
+    """Conservative cost estimate: 1 cent per 10K input characters, min 1."""
+    return max(1, input_characters // 10_000)
 
 
-def _persist_model_call(
+def _reserve_and_check_budget(
     repo: Repository,
     session_id: str,
     assessed_by: str,
+    budget: BudgetConfig,
+    *,
+    started_at: str,
+    input_characters: int,
+) -> tuple[int | None, str | None]:
+    """Atomically reserve a model-call slot and check ceilings.
+
+    Returns (row_id, failure_reason). If failure_reason is not None,
+    the reservation was cancelled and the caller must not proceed.
+    If row_id is not None, the caller must finalize or cancel it.
+    """
+    with repo.transaction():
+        row_id = repo.reserve_model_call(
+            session_id,
+            assessed_by,
+            started_at=started_at,
+            input_characters=input_characters,
+        )
+        if budget.per_session_assessment_ceiling is not None:
+            count = repo.count_model_calls_for_session(session_id)
+            if count > budget.per_session_assessment_ceiling:
+                repo.cancel_model_call(row_id)
+                return None, "per_session_ceiling_exhausted"
+        if budget.daily_cost_ceiling_cents is not None:
+            today = datetime.now(UTC).strftime("%Y-%m-%d")
+            spent = repo.sum_daily_cost_cents(today)
+            estimated = _estimate_cost_cents(input_characters, assessed_by)
+            if spent + estimated > budget.daily_cost_ceiling_cents:
+                repo.cancel_model_call(row_id)
+                return None, "daily_cost_ceiling_exhausted"
+    return row_id, None
+
+
+def _finalize_model_call(
+    repo: Repository,
+    row_id: int,
     *,
     started_at: str,
     success: bool,
     input_characters: int | None,
+    assessed_by: str,
     error_class: str | None = None,
-    estimated_cost_cents: int | None = None,
-) -> int:
+) -> None:
     finished_at = datetime.now(UTC).isoformat()
     started_dt = datetime.fromisoformat(
         started_at[:-1] + "+00:00" if started_at.endswith("Z") else started_at
     )
     latency_ms = max(0, int((datetime.now(UTC) - started_dt).total_seconds() * 1000))
-    return repo.insert_model_call(
-        session_id,
-        assessed_by,
-        started_at=started_at,
-        finished_at=finished_at,
-        latency_ms=latency_ms,
-        input_characters=input_characters,
+    estimated_cost = _estimate_cost_cents(input_characters or 0, assessed_by)
+    repo.finalize_model_call(
+        row_id,
         success=success,
+        latency_ms=latency_ms,
+        finished_at=finished_at,
         error_class=error_class,
-        estimated_cost_cents=estimated_cost_cents,
+        estimated_cost_cents=estimated_cost,
     )
 
 
@@ -207,17 +228,8 @@ def run_luna_assessment(
     http_client: httpx.Client | None = None,
     now: datetime | None = None,
 ) -> AssessmentOutcome:
-    """Run a Luna assessment with budget enforcement and persistence."""
+    """Run a Luna assessment with atomic budget enforcement and persistence."""
     now = now or datetime.now(UTC)
-
-    budget_reason = _check_budget(repo, session_id, budget)
-    if budget_reason is not None:
-        return AssessmentOutcome(
-            assessment=None,
-            model_call_id=None,
-            budget_exhausted=True,
-            failure_reason=budget_reason,
-        )
 
     observation = _build_session_observation(
         repo, session_id, budget_characters=budget.packet_character_budget, now=now
@@ -234,6 +246,17 @@ def run_luna_assessment(
     started_at = now.isoformat()
     input_chars = len(observation.model_dump_json())
 
+    row_id, budget_reason = _reserve_and_check_budget(
+        repo, session_id, "luna", budget, started_at=started_at, input_characters=input_chars
+    )
+    if budget_reason is not None:
+        return AssessmentOutcome(
+            assessment=None,
+            model_call_id=None,
+            budget_exhausted=True,
+            failure_reason=budget_reason,
+        )
+
     result = run_luna(
         profile,
         observation,
@@ -242,20 +265,20 @@ def run_luna_assessment(
     )
 
     success = result.assessment is not None
-    call_id = _persist_model_call(
+    assert row_id is not None
+    _finalize_model_call(
         repo,
-        session_id,
-        "luna",
+        row_id,
         started_at=started_at,
         success=success,
         input_characters=input_chars,
+        assessed_by="luna",
         error_class=result.fallback_reason,
-        estimated_cost_cents=0,
     )
 
     return AssessmentOutcome(
         assessment=result.assessment,
-        model_call_id=call_id,
+        model_call_id=row_id,
         budget_exhausted=False,
         failure_reason=result.fallback_reason,
     )
@@ -272,17 +295,8 @@ def run_terra_assessment(
     http_client: httpx.Client | None = None,
     now: datetime | None = None,
 ) -> AssessmentOutcome:
-    """Run a Terra escalation assessment with budget enforcement and persistence."""
+    """Run a Terra escalation with atomic budget enforcement and persistence."""
     now = now or datetime.now(UTC)
-
-    budget_reason = _check_budget(repo, session_id, budget)
-    if budget_reason is not None:
-        return AssessmentOutcome(
-            assessment=None,
-            model_call_id=None,
-            budget_exhausted=True,
-            failure_reason=budget_reason,
-        )
 
     observation = _build_session_observation(
         repo, session_id, budget_characters=budget.packet_character_budget, now=now
@@ -299,6 +313,17 @@ def run_terra_assessment(
     started_at = now.isoformat()
     input_chars = len(observation.model_dump_json())
 
+    row_id, budget_reason = _reserve_and_check_budget(
+        repo, session_id, "terra", budget, started_at=started_at, input_characters=input_chars
+    )
+    if budget_reason is not None:
+        return AssessmentOutcome(
+            assessment=None,
+            model_call_id=None,
+            budget_exhausted=True,
+            failure_reason=budget_reason,
+        )
+
     result = run_terra(
         profile,
         observation,
@@ -309,20 +334,20 @@ def run_terra_assessment(
     )
 
     success = result.assessment is not None
-    call_id = _persist_model_call(
+    assert row_id is not None
+    _finalize_model_call(
         repo,
-        session_id,
-        "terra",
+        row_id,
         started_at=started_at,
         success=success,
         input_characters=input_chars,
+        assessed_by="terra",
         error_class=result.fallback_reason,
-        estimated_cost_cents=0,
     )
 
     return AssessmentOutcome(
         assessment=result.assessment,
-        model_call_id=call_id,
+        model_call_id=row_id,
         budget_exhausted=False,
         failure_reason=result.fallback_reason,
     )

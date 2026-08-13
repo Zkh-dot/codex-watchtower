@@ -310,11 +310,11 @@ def _run_scheduled_luna(
             "|".join(sorted(s.id for s in active_signals)).encode()
         ).hexdigest()
 
-        # Simple scheduler state: check if last assessment was > 10 min ago.
-        # In a full implementation this would be persisted; for now we use
-        # the reconciled assessment's timestamp.
-        reconciled = repo.get_latest_reconciled(session_id)
-        last_assessed_str = reconciled.reconciled_at if reconciled else None
+        # Derive last_assessed_at from the latest completed model call,
+        # not from reconciliation time — every ingestion poll writes a
+        # fresh reconciled row, so using reconciled_at would suppress Luna
+        # indefinitely (review R3#1).
+        last_assessed_str = repo.latest_model_call_started_at(session_id)
         if last_assessed_str:
             try:
                 last_assessed = datetime.fromisoformat(
@@ -392,7 +392,7 @@ def _dispatch_notifications(repo: Repository, notifier: object, chat_ids: list[s
         )
         outcome = process_delivery(tg, pending, now=now)
         if outcome.delivered:
-            repo.delete_pending_delivery(pd_row["dedup_key"])
+            repo.delete_pending_delivery(pd_row["dedup_key"], pd_row["chat_id"])
             repo.record_delivery(
                 pd_row["dedup_key"],
                 pd_row["session_id"],
@@ -401,7 +401,7 @@ def _dispatch_notifications(repo: Repository, notifier: object, chat_ids: list[s
                 sent_at=now_iso,
             )
         elif outcome.gave_up:
-            repo.delete_pending_delivery(pd_row["dedup_key"])
+            repo.delete_pending_delivery(pd_row["dedup_key"], pd_row["chat_id"])
         elif outcome.pending is not None:
             repo.upsert_pending_delivery(
                 outcome.pending.dedup_key,
@@ -440,6 +440,11 @@ def _dispatch_notifications(repo: Repository, notifier: object, chat_ids: list[s
             f"Needs attention: {reconciled.needs_attention}"
         )
         for chat_id in chat_ids:
+            # Suppress fresh send if a pending delivery already exists for
+            # this (dedup_key, chat_id) — retry is handled by the resume
+            # pass above, preserving backoff and attempt state (R3#2).
+            if repo.has_pending_delivery(key, chat_id):
+                continue
             pending = PendingDelivery(dedup_key=key, chat_id=chat_id, text=text)
             outcome = process_delivery(tg, pending, now=now)
             if outcome.delivered:

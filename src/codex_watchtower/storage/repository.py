@@ -656,10 +656,9 @@ class Repository:
         self._conn.execute(
             """
             INSERT INTO pending_deliveries (
-                dedup_key, session_id, chat_id, text, attempt, next_retry_at, failed
+                dedup_key, chat_id, session_id, text, attempt, next_retry_at, failed
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (dedup_key) DO UPDATE SET
-                chat_id = excluded.chat_id,
+            ON CONFLICT (dedup_key, chat_id) DO UPDATE SET
                 text = excluded.text,
                 attempt = excluded.attempt,
                 next_retry_at = excluded.next_retry_at,
@@ -668,8 +667,8 @@ class Repository:
             """,
             (
                 dedup_key,
-                session_id,
                 chat_id,
+                session_id,
                 text,
                 attempt,
                 next_retry_at,
@@ -688,8 +687,18 @@ class Repository:
         )
         return [dict(row) for row in rows]
 
-    def delete_pending_delivery(self, dedup_key: str) -> None:
-        self._conn.execute("DELETE FROM pending_deliveries WHERE dedup_key = ?", (dedup_key,))
+    def has_pending_delivery(self, dedup_key: str, chat_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM pending_deliveries WHERE dedup_key = ? AND chat_id = ? AND failed = 0",
+            (dedup_key, chat_id),
+        ).fetchone()
+        return row is not None
+
+    def delete_pending_delivery(self, dedup_key: str, chat_id: str) -> None:
+        self._conn.execute(
+            "DELETE FROM pending_deliveries WHERE dedup_key = ? AND chat_id = ?",
+            (dedup_key, chat_id),
+        )
 
     # --- model call observability ------------------------------------
 
@@ -728,7 +737,66 @@ class Repository:
         assert cursor.lastrowid is not None
         return cursor.lastrowid
 
-    # --- process evidence (launcher, Task 9A) -------------------------
+    def reserve_model_call(
+        self,
+        session_id: str,
+        assessed_by: str,
+        *,
+        started_at: str,
+        input_characters: int | None,
+    ) -> int:
+        """Atomically reserve a model-call slot by inserting a pending row.
+
+        The reservation counts toward the ceiling immediately so
+        concurrent callers see it (R3#3). Caller checks ceilings after
+        this insert and must cancel if exhausted.
+        """
+        cursor = self._conn.execute(
+            """
+            INSERT INTO model_calls (
+                session_id, assessed_by, started_at, finished_at, latency_ms,
+                input_characters, success, error_class, estimated_cost_cents
+            ) VALUES (?, ?, ?, NULL, NULL, ?, 0, NULL, NULL)
+            """,
+            (session_id, assessed_by, started_at, input_characters),
+        )
+        assert cursor.lastrowid is not None
+        return cursor.lastrowid
+
+    def finalize_model_call(
+        self,
+        row_id: int,
+        *,
+        success: bool,
+        latency_ms: int | None,
+        finished_at: str,
+        error_class: str | None = None,
+        estimated_cost_cents: int | None = None,
+    ) -> None:
+        """Update a reserved model-call row with the actual outcome."""
+        self._conn.execute(
+            """
+            UPDATE model_calls SET
+                success = ?,
+                latency_ms = ?,
+                finished_at = ?,
+                error_class = ?,
+                estimated_cost_cents = ?
+            WHERE row_id = ?
+            """,
+            (
+                1 if success else 0,
+                latency_ms,
+                finished_at,
+                error_class,
+                estimated_cost_cents,
+                row_id,
+            ),
+        )
+
+    def cancel_model_call(self, row_id: int) -> None:
+        """Delete a reserved model-call row when the budget is exhausted."""
+        self._conn.execute("DELETE FROM model_calls WHERE row_id = ?", (row_id,))
 
     def create_process_evidence(
         self,
@@ -815,6 +883,14 @@ class Repository:
             "SELECT COUNT(*) as cnt FROM model_calls WHERE session_id = ?", (session_id,)
         ).fetchone()
         return row["cnt"] if row else 0
+
+    def latest_model_call_started_at(self, session_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT started_at FROM model_calls WHERE session_id = ? "
+            "ORDER BY started_at DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        return row["started_at"] if row else None
 
     def sum_daily_cost_cents(self, day: str) -> int:
         row = self._conn.execute(
