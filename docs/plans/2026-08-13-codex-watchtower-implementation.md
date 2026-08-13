@@ -561,11 +561,13 @@
 **Steps:**
 
 1. Add golden messages for warning, waiting, terminal failure, and terminal completion states.
-2. Test transition policy and concern fingerprinting.
+2. Test transition policy and concern fingerprinting over `(severity, kind, evidence_signal_id)` triples.
 3. Test changed prose with identical evidence is suppressed.
-4. Test critical evidence always includes a factual reason and event cursor.
-5. Apply trusted-remote redaction, path minimization, Telegram markup escaping, `chat_id` allowlisting, and omission of prompts/output/local links.
-6. Commit: `feat: render deduplicated operator notifications`.
+4. Test that an advanced event cursor alone does not change the deduplication key, and that a restart replaying the same window sends nothing.
+5. Test the critical-concern cooldown resend and the digest path.
+6. Test critical evidence always includes a factual reason and event cursor in the body.
+7. Apply trusted-remote redaction, path minimization, Telegram markup escaping, `chat_id` allowlisting, and omission of prompts/output/local links.
+8. Commit: `feat: render deduplicated operator notifications`.
 
 ### Task 27: Add Telegram Bot API notifier
 

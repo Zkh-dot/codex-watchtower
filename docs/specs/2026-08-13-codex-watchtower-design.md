@@ -301,8 +301,14 @@ Do not send when only wording changes.
 Deduplication key:
 
 ```text
-session_id + authoritative_status + concern_fingerprint + event_cursor
+session_id + authoritative_status + concern_fingerprint
 ```
+
+The key deliberately excludes the event cursor. The cursor advances on every ingested event, so including it would make the key unique per assessment and suppress no duplicate at all; it would also re-notify after a restart replayed the same window under a new cursor.
+
+`concern_fingerprint` is the sorted set of `(severity, kind, evidence_signal_id)` triples from the authoritative assessment. It ignores prose, model identity, confidence, and event cursors, so a reworded explanation of unchanged evidence does not resend.
+
+For each key Watchtower persists the last delivery, its cursor, and its send time. On a repeat key it resends only when a configured cooldown has elapsed and the concern is still `critical`, or when a periodic digest is due. The cursor is carried in the message body as provenance, never in the key.
 
 A message includes elapsed time, current action, alignment, concerns, latest test result, redacted changed paths, and session ID/API base when available. Telegram is a separate remote sink: it always applies trusted-remote redaction, never sends prompts or command-output excerpts, validates the configured `chat_id` against an allowlist, escapes Telegram markup, and omits local deep links.
 
