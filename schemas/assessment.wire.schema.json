@@ -8,7 +8,7 @@
   "required": ["schema_version", "status", "current_action", "goal_alignment", "evidence", "basis_ids", "concerns", "needs_attention", "recommended_human_action", "confidence", "assessed_by", "escalation_reason", "event_cursor", "assessed_at"],
   "properties": {
     "schema_version": { "enum": ["1.0"] },
-    "status": { "enum": ["progressing", "investigating", "between_turns", "waiting", "stalled", "looping", "off_scope", "terminal_completed", "terminal_completed_unconfirmed", "terminal_failed", "unknown"] },
+    "status": { "enum": ["progressing", "investigating", "between_turns", "waiting", "stalled", "looping", "off_scope", "terminal_completed", "terminal_failed", "idle", "unknown"] },
     "current_action": { "type": "string", "description": "One sentence, at most 500 characters." },
     "goal_alignment": { "enum": ["aligned", "possibly_aligned", "misaligned", "unknown"] },
     "evidence": {

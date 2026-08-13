@@ -117,7 +117,7 @@ Responsibilities:
 - watch the configured Codex sessions root;
 - identify new and modified `rollout-*.jsonl` files;
 - extract session ID, workspace, start time, source, model, and original goal;
-- classify lifecycle as `active_turn`, `between_turns`, `waiting`, `terminal_completed`, `terminal_completed_unconfirmed`, `terminal_failed`, or `unknown`;
+- classify lifecycle as `active_turn`, `between_turns`, `waiting`, `idle`, `terminal_completed`, `terminal_failed`, or `unknown`;
 - map a session to a stable Watchtower record.
 
 The first user task message is the default goal. The optional launcher in §5.11 may supply a clearer explicit goal, path boundaries, and process evidence.
@@ -318,7 +318,20 @@ The reconciler produces the authoritative assessment:
 5. Codex `TurnComplete`/wire `task_complete` changes state to `between_turns`; it never proves terminal session completion;
 6. terminal completion requires zero-exit process evidence from §5.11 plus a configurable quiet grace period with no new turn, or an explicit operator-provided terminal marker;
 7. terminal failure requires non-zero process exit evidence from §5.11 or an explicit deterministic process failure rule;
-8. for an unobserved session, where no process evidence exists, the quiet grace period alone yields `terminal_completed_unconfirmed`, which notifies and closes the run report but is never reported as a confirmed outcome.
+8. for an unobserved session, where no process evidence exists, the quiet grace period alone yields `idle`, which is **not** a terminal state;
+9. an `idle` session that receives any new event returns to `active_turn` and the run continues.
+
+`idle` exists because a quiet transcript is not evidence of completion. A Codex session can be resumed, and a paused run and a finished run produce identical trailing records, so promoting silence to `terminal_completed_unconfirmed` would close a live session and permanently mislabel it. Only process evidence from §5.11 produces a terminal state; silence produces `idle`, which is reversible by definition.
+
+Reopening is a first-class transition, not an error path:
+
+- entering `idle` increments `status_epoch` and emits a **provisional** run summary marked `provisional: true` with a monotonic `report_version`;
+- a new event reopens the session to `active_turn`, increments `status_epoch` again, and emits a supersede notice referencing the superseded `report_version`, so an operator who already read the summary learns it was not final;
+- the reopened session keeps its original session ID, cursors, and event sequence; nothing is re-ingested and no event is re-notified;
+- the stale `idle` deduplication entry cannot suppress alerts in the reopened episode, because the epoch has advanced;
+- a session may reopen any number of times, and each `idle` entry produces a new provisional report version.
+
+A final, non-provisional run report is emitted only for `terminal_completed` or `terminal_failed`, both of which require process evidence and neither of which can be reopened.
 
 #### Session state and assessment status
 
@@ -332,7 +345,7 @@ The projection is fixed, and the reconciler applies it before any model output i
 | `between_turns` | `between_turns` |
 | `waiting` | `waiting` |
 | `terminal_completed` | `terminal_completed` |
-| `terminal_completed_unconfirmed` | `terminal_completed_unconfirmed` |
+| `idle` | `idle` |
 | `terminal_failed` | `terminal_failed` |
 | `unknown` | `unknown` |
 
@@ -395,19 +408,27 @@ A message includes elapsed time, current action, alignment, concerns, latest tes
 
 ### 5.11 Launcher and process evidence
 
-Rollout JSONL alone cannot distinguish a finished session from an idle one: the last record of a completed run and of a run paused between turns are the same shape. Terminal states in §5.8 therefore require evidence from outside the transcript. Watchtower obtains it in one of three ways, in descending order of confidence.
+Rollout JSONL alone cannot distinguish a finished session from a paused one: the last record of a completed run and of a run between turns are the same shape. Terminal states in §5.8 therefore require evidence from outside the transcript, and silence alone only ever produces the reversible `idle` state. Watchtower obtains process evidence in one of three ways, in descending order of confidence.
 
-**Wrapped run (preferred).** `watchtower run -- codex exec ...` spawns Codex as a child, passes stdio through unchanged, and writes a process-evidence record to the state directory:
+**Wrapped run (preferred).** `watchtower run -- codex exec ...` spawns Codex as a child, passes stdio through unchanged, and maintains a process-evidence record in the state directory:
 
 ```text
-{launch_id, argv_hash, pid, started_at, workspace, goal, expected_paths, forbidden_paths, exit_code, exited_at}
+{launch_id, argv_hash, state, pid, started_at, workspace, session_id,
+ correlation_method, goal, expected_paths, forbidden_paths, exit_code, exited_at}
 ```
 
-The record is created before spawn and updated on exit, including on signal termination. The launcher never inspects, filters, or alters Codex output; it only observes process lifetime. Correlation to a rollout file uses the first `session_meta` record written by that PID under the sessions root after `started_at`; ambiguity yields no correlation rather than a guess.
+The record is created before spawn with `state=pending`, `pid=null`, and `session_id=null`, because no PID exists until the child is running. It is updated atomically to `state=running` with the real PID once spawn succeeds, and to `state=exited` on exit, including signal termination. A record left in `pending` after a crash is evidence of a failed spawn, not of a session.
 
-**Adopted run.** For a session started outside the wrapper, Watchtower may adopt it when the operator enables process adoption: it matches a live Codex process whose working directory equals the session workspace and whose start time precedes the first rollout record, then watches for that PID to disappear. Disappearance without a recorded exit code yields `terminal_completed_unconfirmed`, never `terminal_failed`, because the exit status is unknown.
+Correlation to a rollout file cannot use the PID. Persisted `session_meta` in Codex 0.133.0 contains `id`, `timestamp`, `cwd`, `originator`, `cli_version`, `source`, `model_provider`, `base_instructions`, `git`, and `thread_source` — no PID — and the filesystem watcher cannot tell which process wrote a file. Two protocols are defined instead:
 
-**Unobserved run.** With neither wrapper nor adoption, only rule 8 of §5.8 applies: after the quiet grace period the session becomes `terminal_completed_unconfirmed`.
+1. **Canonical, from the child's own output.** With `codex exec --json`, Codex emits JSONL on stdout including the session identifier. The launcher tees stdout, forwarding every byte unmodified while parsing a copy, and records the identifier it observes. This is a direct binding between the process the launcher spawned and the session that process reported, and it is the only method that establishes identity rather than inferring it. `correlation_method=stdout_canonical`.
+2. **Snapshot difference, fail-closed.** When the canonical identifier is unavailable, the launcher snapshots the set of rollout files under the sessions root immediately before spawn, then waits for new files to appear. It correlates only when **exactly one** new rollout has `cwd` equal to the launcher's working directory and a first-record timestamp inside `[started_at, started_at + correlation_window]`. Zero candidates, more than one candidate, or window expiry all record `correlation_method=none`, and the run is treated as unobserved. Concurrent Codex runs in one workspace are the expected ambiguous case and are never resolved by guessing. `correlation_method=snapshot_unique`.
+
+The launcher never inspects, filters, or alters Codex behavior: teeing stdout forwards bytes unchanged, it writes nothing to the child's stdin, and it observes process lifetime only.
+
+**Adopted run.** For a session started outside the wrapper, Watchtower may adopt it when the operator enables process adoption: it matches a live Codex process whose working directory equals the session workspace and whose start time precedes the first rollout record, then watches for that PID to disappear. Adoption is inference, not identity, so it is off by default and requires a unique match. Disappearance without a recorded exit code yields `idle`, never `terminal_failed`, because the exit status is unknown.
+
+**Unobserved run.** With neither wrapper nor adoption, only rule 8 of §5.8 applies: after the quiet grace period the session becomes `idle`.
 
 Process evidence is a `process_lifecycle` event with `exit_code` set. The launcher is optional; its absence degrades terminal-state confidence and nothing else. It performs no Codex mutation and satisfies the non-goal in §3, since it neither steers nor sends text to Codex.
 
@@ -562,7 +583,7 @@ The MVP is accepted when:
 7. Terra runs only under documented escalation conditions.
 8. Deterministic critical signals survive contradictory model output.
 9. Remote-mode packets pass redaction tests with seeded secrets.
-10. A wrapped run reaches `terminal_completed` or `terminal_failed` from process evidence, an unobserved run reaches `terminal_completed_unconfirmed` from the quiet grace period, and both emit a completion notification containing the final status, elapsed time, changed files, tests observed, and session identifier.
+10. A wrapped run reaches `terminal_completed` or `terminal_failed` from process evidence and emits a final run report; an unobserved run reaches `idle` and emits a provisional report; a new event reopens the idle session exactly once per idle entry and supersedes that report. Every report contains status, elapsed time, changed files, tests observed, and session identifier.
 11. The local API and SSE stream survive malformed and unknown Codex events.
 12. For v0.2.0 only: the frozen calibration report is committed and the promotion gates are met, or the system stays in advisory mode.
 

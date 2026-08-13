@@ -249,15 +249,17 @@
 **Steps:**
 
 1. Test multiple turn start/complete sequences remain `between_turns`, not terminally completed.
-2. Test terminal completion from zero-exit process evidence (Task 9A) plus quiet grace period.
+2. Test terminal completion from zero-exit process evidence (Task 9A) plus quiet grace period, and that no path reaches a terminal state without process evidence.
 3. Test terminal failure from non-zero exit and explicit process evidence.
-4. Test a live file with no process evidence remains active/between-turns/unknown, and that quiet-period expiry without process evidence yields `terminal_completed_unconfirmed`.
-5. Test that prose such as “done” does not mark completion.
-6. Commit: `feat: derive codex lifecycle from explicit events`.
+4. Test a live file with no process evidence remains active/between-turns/unknown, and that quiet-period expiry without process evidence yields `idle`, which is not terminal.
+5. Test the reopen transition: an `idle` session receiving any new event returns to `active_turn`, keeps its session ID, cursors, and event sequence, re-ingests nothing, and advances `status_epoch`.
+6. Test that repeated idle/reopen cycles each produce a new provisional report version and a supersede notice.
+7. Test that prose such as “done” does not mark completion.
+8. Commit: `feat: derive codex lifecycle from explicit events`.
 
 ### Task 9A: Capture process evidence for terminal states
 
-**Objective:** Provide the out-of-transcript evidence that §5.11 and reconciler rules 6-8 require, without which no session can leave `between_turns`.
+**Objective:** Provide the out-of-transcript evidence that §5.11 and reconciler rules 6-9 require, without which no session can reach a terminal state.
 
 **Files:**
 
@@ -270,12 +272,15 @@
 **Steps:**
 
 1. Test that `watchtower run -- <cmd>` passes stdio through unchanged, forwards the child exit code, and forwards SIGINT/SIGTERM to the child.
-2. Test that the evidence record is written before spawn and updated on normal exit, non-zero exit, and signal termination, including when Watchtower itself is not running.
-3. Test correlation from `launch_id` to the first `session_meta` written by that PID after `started_at`, and that ambiguity records no correlation.
-4. Test process adoption: matching workspace and start order, PID disappearance yielding `terminal_completed_unconfirmed`, and PID reuse rejected by start time.
-5. Test that an unobserved session reaches `terminal_completed_unconfirmed` from the quiet grace period alone and never `terminal_failed`.
-6. Emit process evidence as a `process_lifecycle` event with `exit_code`; assert the launcher writes nothing to the child's stdin.
-7. Commit: `feat: capture codex process exit evidence`.
+2. Test the record lifecycle: created before spawn as `state=pending` with `pid=null`, updated atomically to `state=running` with the real PID after a successful spawn, and to `state=exited` on normal exit, non-zero exit, and signal termination, including when Watchtower itself is not running. A PID cannot exist before spawn, so nothing may require one there.
+3. Test that a failed spawn leaves the record in `pending` and creates no session.
+4. Test canonical correlation: with `codex exec --json`, the launcher tees stdout, forwards every byte unmodified, and binds the session identifier the child itself reported.
+5. Test snapshot correlation: exactly one new rollout with matching `cwd` inside the correlation window correlates; zero candidates, two concurrent runs in one workspace, and window expiry all record `correlation_method=none` and leave the run unobserved.
+6. Assert no test relies on a PID appearing in `session_meta`; Codex 0.133.0 does not emit one and the watcher cannot attribute a file to a process.
+7. Test process adoption: matching workspace and start order, PID disappearance yielding `idle`, and PID reuse rejected by start time.
+8. Test that an unobserved session reaches `idle` from the quiet grace period alone and never a terminal state.
+9. Emit process evidence as a `process_lifecycle` event with `exit_code`; assert the launcher writes nothing to the child's stdin.
+10. Commit: `feat: capture codex process exit evidence`.
 
 ### Task 10: Add filesystem watcher orchestration
 
@@ -763,11 +768,12 @@ Phase 10 gates v0.2.0, not v0.1.0. v0.1.0 ships in advisory mode per specificati
 **Steps:**
 
 1. Replay timestamped events under a fake clock.
-2. Restart Watchtower midway.
-3. Verify each normalized event and notification appears exactly once.
-4. Verify only incremental windows reach the model client.
-5. Verify completion report contents.
-6. Commit: `test: verify restart-safe autonomous run replay`.
+2. Replay the idle/reopen case end to end: the grace period expires, a provisional report is sent, a new turn is appended, the session reopens exactly once, the supersede notice references the superseded report version, and the stale idle dedup entry suppresses no alert in the reopened episode.
+3. Restart Watchtower midway.
+4. Verify each normalized event and notification appears exactly once.
+5. Verify only incremental windows reach the model client.
+6. Verify provisional and final report contents.
+7. Commit: `test: verify restart-safe autonomous run replay`.
 
 ### Task 35: Test degraded dependencies
 
