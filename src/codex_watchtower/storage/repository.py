@@ -428,8 +428,11 @@ class Repository:
             """
             INSERT INTO reconciled_assessments (
                 session_id, notification_status, status_epoch, lifecycle_status_epoch,
-                attention_epoch, needs_attention, body, reconciled_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                attention_epoch, needs_attention, body, reconciled_at, updated_seq
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?,
+                (SELECT COALESCE(MAX(updated_seq), 0) + 1 FROM reconciled_assessments)
+            )
             ON CONFLICT (session_id) DO UPDATE SET
                 notification_status = excluded.notification_status,
                 status_epoch = excluded.status_epoch,
@@ -437,7 +440,8 @@ class Repository:
                 attention_epoch = excluded.attention_epoch,
                 needs_attention = excluded.needs_attention,
                 body = excluded.body,
-                reconciled_at = excluded.reconciled_at
+                reconciled_at = excluded.reconciled_at,
+                updated_seq = excluded.updated_seq
             """,
             (
                 reconciled.session_id,
@@ -449,6 +453,25 @@ class Repository:
                 json.dumps(reconciled.model_dump(mode="json")),
                 reconciled.reconciled_at,
             ),
+        )
+
+    def get_reconciled_since(self, updated_seq: int | None) -> list[sqlite3.Row]:
+        """Reconciled assessments across all sessions whose updated_seq exceeds the cursor.
+
+        Backs the SSE endpoint's reconnect-cursor support: a client that
+        disconnects at updated_seq N resumes with ``after=N`` and misses
+        nothing, regardless of which sessions changed while it was away.
+        """
+        if updated_seq is None:
+            return list(
+                self._conn.execute("SELECT * FROM reconciled_assessments ORDER BY updated_seq ASC")
+            )
+        return list(
+            self._conn.execute(
+                "SELECT * FROM reconciled_assessments WHERE updated_seq > ? "
+                "ORDER BY updated_seq ASC",
+                (updated_seq,),
+            )
         )
 
     def get_latest_reconciled(self, session_id: str) -> domain.ReconciledAssessment | None:

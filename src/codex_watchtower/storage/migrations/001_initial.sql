@@ -162,8 +162,17 @@ CREATE TABLE IF NOT EXISTS reconciled_assessments (
     attention_epoch INTEGER NOT NULL,
     needs_attention INTEGER NOT NULL,
     body TEXT NOT NULL,
-    reconciled_at TEXT NOT NULL
+    reconciled_at TEXT NOT NULL,
+    -- Global monotonic marker bumped on every insert/update, across all
+    -- sessions. An UPDATE preserves SQLite's implicit rowid, so that alone
+    -- cannot serve as a "what changed since I last looked" cursor for the
+    -- SSE endpoint; this column can, since it explicitly advances on
+    -- every write regardless of whether the row already existed.
+    updated_seq INTEGER NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_reconciled_assessments_updated_seq
+    ON reconciled_assessments (updated_seq);
 
 CREATE TABLE IF NOT EXISTS deliveries (
     dedup_key TEXT PRIMARY KEY,
