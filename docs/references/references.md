@@ -19,7 +19,8 @@ Verified locally:
 - rollout records include session metadata, task lifecycle, messages, tool activity, and completion records;
 - `codex app-server` supports stdio, Unix socket, and WebSocket transports;
 - Codex has built-in OpenTelemetry configuration;
-- `codex exec` supports `--ephemeral`, which must not be used if Watchtower relies on persisted rollouts.
+- `codex exec` supports `--ephemeral`, which must not be used if Watchtower relies on persisted rollouts;
+- `codex exec resume <SESSION_ID> --json` starts a new process that adopts an existing session ID and appends to the same rollout file (established during design review). A persisted session therefore has no defined end, and any terminal state Watchtower reports describes one execution rather than the session.
 
 Codex formats evolve. The implementation must treat unknown JSONL event types as preserved opaque events rather than fatal parser errors.
 

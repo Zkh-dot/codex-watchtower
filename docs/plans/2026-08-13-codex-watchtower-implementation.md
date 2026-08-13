@@ -59,10 +59,12 @@
 **Steps:**
 
 1. Resolve deployment-specific Luna/Terra identifiers and structured-output support.
-2. Smoke one schema-valid request per profile after explicit operator approval.
-3. Verify HTTPS certificate validation, redirect rejection, endpoint allowlisting, disabled proxy inheritance, response-size cap, retry budget, and provider retention/logging policy.
-4. Record latency and cost without storing prompts or credentials.
-5. Commit: `spike: verify assessment model contracts`.
+2. Verify keyword support explicitly rather than structured-output support in general: submit `schemas/assessment.schema.json` unmodified, record which of `const`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `minItems`, `maxItems`, `uniqueItems`, `oneOf`, and external `$ref` are rejected, then confirm `schemas/assessment.wire.schema.json` is accepted. Discovering this in Phase 6 instead forces a schema rewrite mid-cascade.
+3. Record the result as a capability matrix keyed by provider, model, and API version in `spikes/models/README.md`. The wire schema is conservative pending this matrix; do not assert that a specific keyword is unsupported anywhere until measured here.
+4. Smoke one schema-valid request per profile after explicit operator approval.
+5. Verify HTTPS certificate validation, redirect rejection, endpoint allowlisting, disabled proxy inheritance, response-size cap, retry budget, and provider retention/logging policy.
+6. Record latency and cost without storing prompts or credentials.
+7. Commit: `spike: verify assessment model contracts`.
 
 ## Phase 0: Repository and quality gates
 
@@ -78,7 +80,7 @@
 - Create: `src/codex_watchtower/cli.py`
 - Create: `tests/test_smoke.py`
 - Create: `.github/workflows/ci.yml`
-- Create: `.gitignore`
+- Modify: `.gitignore`
 
 **Steps:**
 
@@ -108,14 +110,17 @@
 - Create: `tests/schemas/test_schemas.py`
 - Create: `tests/fixtures/observations/healthy.json`
 - Create: `tests/fixtures/assessments/healthy.json`
+- Create: `tests/fixtures/reconciled/healthy.json`
 - Modify: `pyproject.toml`
 
 **Steps:**
 
-1. Write tests loading both schemas and validating healthy examples.
+1. Write tests loading all four schemas and validating healthy examples.
 2. Add one deliberately invalid in-test assessment and assert validation failure.
-3. Run the focused tests; verify red before fixture/schema wiring and green after.
-4. Commit: `test: enforce observation and assessment schemas`.
+3. Assert `assessment.wire.schema.json` stays aligned with `assessment.schema.json`: identical property sets, enum members, and nullability at every level, `additionalProperties: false` and fully populated `required` everywhere, and no strict-mode-rejected keyword present.
+4. Assert every payload valid under the authoritative schema is also valid under the wire schema, so the projection can only be more permissive.
+5. Run the focused tests; verify red before fixture/schema wiring and green after.
+6. Commit: `test: enforce observation and assessment schemas`.
 
 ## Phase 1: Domain model and durable state
 
@@ -130,15 +135,16 @@
 
 **Steps:**
 
-1. Write tests for enum values, assessment confidence bounds, unique evidence references, and schema serialization.
+1. Write tests for enum values, `confidence_percent` integer bounds, unique evidence references, and schema serialization.
 2. Implement Pydantic models matching the committed JSON Schemas.
-3. Enforce RFC 3339 timestamps, `opened_at <= closed_at`, cursor consistency, unique/monotonic event IDs and timestamps, events inside the window, and assessment references resolving to packet event/signal/system IDs.
-4. Verify serialized fixtures with `jsonschema[format]` and `FormatChecker`.
-5. Commit: `feat: add typed watchtower domain model`.
+3. Enforce every domain invariant listed in §5.3, one test each: timestamps and window containment, unique/monotonic event IDs and sequences, `opened_at <= closed_at`, `from_cursor < to_cursor`, `used_characters <= budget_characters`, `signal.event_ids` resolving to packet events, evidence refs resolving to packet event/signal/`system_refs` IDs, `basis_ids` resolving to `evidence[].ref_id`, `supersedes < report_version`, and `run_id`/`execution_epoch` being null or set together.
+4. Test the session-state to assessment-status projection: each state permits only its documented statuses, and a model narrowing within `active_turn` is accepted while a cross-row move is rejected.
+5. Verify serialized fixtures with `jsonschema[format]` and `FormatChecker`.
+6. Commit: `feat: add typed watchtower domain model`.
 
 ### Task 4: Create SQLite migrations and repository interface
 
-**Objective:** Persist sessions, cursors, normalized events, signals, assessments, model calls, and deliveries in WAL mode.
+**Objective:** Persist sessions, executions, process evidence, cursors, normalized events, signals, assessments, model calls, and deliveries in WAL mode.
 
 **Files:**
 
@@ -151,7 +157,7 @@
 
 1. Write tests for migration idempotence and WAL mode.
 2. Test atomic insertion of an already-redacted event and cursor update; raw rollout payloads must never enter SQLite.
-3. Test event deduplication by stable event ID.
+3. Test event deduplication by logical event ID, including concurrent inserts of the same ID, and that the event sequence is assigned exactly once per logical event.
 4. Test latest-assessment and pending-delivery queries.
 5. Implement the minimal repository using the standard `sqlite3` module and explicit transactions.
 6. Run repository tests twice against the same temporary database.
@@ -169,7 +175,7 @@
 **Steps:**
 
 1. Seed a corrupt database fixture and assert startup fails with a typed fatal error.
-2. Test that the original file remains byte-identical.
+2. Test that the main database file remains byte-identical. Run the check over an immutable URI (`file:...?immutable=1`) so the probe cannot create `-wal` or `-shm` sidecars, and assert none appear.
 3. Add `PRAGMA quick_check` startup validation and a clear recovery message.
 4. Commit: `feat: fail safely on state database corruption`.
 
@@ -207,10 +213,12 @@
 2. Complete the line and assert exactly one event appears.
 3. Test restart from a stored byte cursor.
 4. Test inode replacement, truncation, inode reuse, copy-truncate, fast regrowth beyond the old offset, prefix mismatch, and migration between devices.
-5. On mismatch, replay from the last verified newline checkpoint or file start and deduplicate by stable event ID.
-6. Reject symlinks escaping the root, non-regular files, wrong-owner files, FIFO/devices, and configured oversize limits; verify identity again after open.
-7. Implement the cursor `<device>:<inode>:<offset>:<checkpoint-hash>`.
-8. Commit: `feat: tail codex rollouts incrementally`.
+5. On a prefix-preserving mismatch, replay from the last verified newline checkpoint or file start, continue the absolute record ordinal, and deduplicate by logical event ID.
+6. Test the append-only precondition directly: a prefix-hash mismatch stops ingestion for that session, marks it `identity_broken`, emits a critical `dependency_unavailable` signal naming the file, preserves existing events and their sequences, and re-identifies nothing.
+7. Reject symlinks escaping the root, non-regular files, wrong-owner files, FIFO/devices, and configured oversize limits; verify identity again after open.
+8. Implement the internal cursor `<device>:<inode>:<offset>:<record-ordinal>:<checkpoint-hash>`, carrying the absolute ordinal so a resumed replay continues the count rather than recomputing it, and assert the cursor is never returned by any API route or embedded in an observation, assessment, or notification.
+9. Assign the monotonic per-session event sequence transactionally at first insert, under a unique constraint on the logical event ID; test that a replayed record collides, is ignored, and keeps its original sequence, so notification provenance never changes retroactively.
+10. Commit: `feat: tail codex rollouts incrementally`.
 
 ### Task 8: Normalize known and unknown Codex events
 
@@ -226,10 +234,13 @@
 
 1. Add fixtures for session lifecycle, messages, commands, command output, patches, token updates, errors, and unknown event types.
 2. Write expected normalized snapshots.
-3. Implement stable event ID generation from session ID, source offset, type, and payload hash.
-4. Redact before persistence, bound command output, and retain only redacted summary plus source hash/original byte length.
-5. Ensure unknown events become `kind=unknown` with source type preserved.
-6. Commit: `feat: normalize codex rollout events`.
+3. Implement logical event IDs from session ID, absolute record ordinal, kind, and payload hash. Store device/inode/offset only as a source locator. Test that relocating a record to a different offset, as copy-truncate and replay do, yields the same ID and no duplicate row.
+4. Regression-test both failure modes of the relative ordinal this replaces: two identical records where recovery starts after the first must not give the survivor the first record's ID, and a count continued from a stored total must not insert a replayed record twice. Both must hold for replay from the file start and from a checkpoint.
+5. Redact before persistence, bound command output, and retain only redacted summary plus source hash/original byte length.
+6. Ensure unknown events become `kind=unknown` with source type preserved.
+7. Add negative fixtures: a `process_lifecycle` event without `run_id`, `execution_epoch`, or `exit_code`, and one with an empty-string `run_id`, must fail schema validation, since execution scope is what keeps a late exit from terminating a later execution.
+8. Test that turn boundaries normalize to `turn_lifecycle` and process boundaries to `process_lifecycle`, and that no single `lifecycle` kind is emitted.
+9. Commit: `feat: normalize codex rollout events`.
 
 ### Task 9: Classify lifecycle without model inference
 
@@ -243,11 +254,41 @@
 **Steps:**
 
 1. Test multiple turn start/complete sequences remain `between_turns`, not terminally completed.
-2. Test terminal completion from launcher/process exit plus quiet grace period.
-3. Test terminal failure from non-zero exit and explicit process evidence.
-4. Test a live file with no process evidence remains active/between-turns/unknown.
-5. Test that prose such as “done” does not mark completion.
-6. Commit: `feat: derive codex lifecycle from explicit events`.
+2. Test terminal completion from zero-exit process evidence (Task 9A) plus quiet grace period, and that no path reaches a terminal state without process evidence.
+3. Test terminal failure from non-zero exit and explicit process evidence, and that a terminal transition is accepted only from a `process_lifecycle` event whose `run_id` is the session's current execution. A late exit event from execution 1 must not terminate a resumed execution 2.
+4. Test a live file with no process evidence remains active/between-turns/unknown, and that quiet-period expiry without process evidence yields `idle`, which is not terminal.
+5. Test the reopen transition from `idle`: any new event returns the session to `active_turn`, keeps its session ID, cursors, and event sequence, re-ingests nothing, and advances `status_epoch` **only**. `execution_epoch` and `run_id` must not move: the same process resuming work after a quiet period is not a new execution. An unobserved session keeps both null rather than reporting a fictitious execution 0.
+6. Test reopen from an execution-terminal state: a zero-exit wrapped execution reports `terminal_completed`, then `codex exec resume <same-session-id> --json` opens a new execution, returns the session to `active_turn`, and advances `execution_epoch`. No terminal state may be treated as the end of a persisted session.
+7. Test that repeated reopen cycles from either path each produce a new report version and a supersede notice.
+8. Test counter exhaustion starting **at** the maximum, not one below it, for each of `status_epoch`, `attention_epoch`, `execution_epoch`, and `report_version`. The session must reach `fatal` with the matching reason and `identity_broken`, both epochs must freeze rather than increment or decrease, and the fatal message must deliver under its own identity. The `status_epoch` case is the one that is unreachable if the fatal path depends on incrementing that counter.
+9. Test that prose such as “done” does not mark completion.
+10. Commit: `feat: derive codex lifecycle from explicit events`.
+
+### Task 9A: Capture process evidence for terminal states
+
+**Objective:** Provide the out-of-transcript evidence that §5.11 and reconciler rules 6-9 require, without which no session can reach a terminal state.
+
+**Files:**
+
+- Create: `src/codex_watchtower/launcher/run.py`
+- Create: `src/codex_watchtower/launcher/evidence.py`
+- Create: `tests/unit/launcher/test_run.py`
+- Create: `tests/unit/launcher/test_adopt.py`
+- Modify: `src/codex_watchtower/storage/migrations/001_initial.sql`
+
+**Steps:**
+
+1. Test that `watchtower run -- <cmd>` passes stdio through unchanged, forwards the child exit code, and forwards SIGINT/SIGTERM to the child.
+2. Test the record lifecycle: created before spawn as `state=pending` with `pid=null`, updated atomically to `state=running` with the real PID after a successful spawn, and to `state=exited` on normal exit, non-zero exit, and signal termination, including when Watchtower itself is not running. A PID cannot exist before spawn, so nothing may require one there.
+3. Test that a failed spawn leaves the record in `pending` and creates no session.
+4. Test canonical correlation: with `codex exec --json`, the launcher tees stdout, forwards every byte unmodified, and binds the session identifier the child itself reported.
+5. Test snapshot correlation over both candidate kinds: a newly created rollout and an existing rollout that grows, since a resume appends rather than creating a file. Exactly one matching candidate correlates; zero candidates, two concurrent runs in one workspace, and window expiry all record `correlation_method=none` and leave the run unobserved.
+6. Test that a launcher binding an existing session ID opens a new execution with the next `execution_epoch` on that session, and never creates a second logical session.
+7. Assert no test relies on a PID appearing in `session_meta`; Codex 0.133.0 does not emit one and the watcher cannot attribute a file to a process.
+8. Test process adoption: matching workspace and start order, PID disappearance yielding `idle`, and PID reuse rejected by start time.
+9. Test that an unobserved session reaches `idle` from the quiet grace period alone and never a terminal state.
+10. Emit process evidence as a `process_lifecycle` event carrying `exit_code`, `run_id`, and `execution_epoch`, which the event contract now includes; assert the launcher writes nothing to the child's stdin.
+11. Commit: `feat: capture codex process exit evidence`.
 
 ### Task 10: Add filesystem watcher orchestration
 
@@ -334,11 +375,12 @@
 
 **Steps:**
 
-1. Test three identical commands with unchanged outcomes trigger a warning.
-2. Test the same command after changed files or changed result does not automatically trigger.
-3. Test normalization of volatile timestamps/temp paths.
-4. Test three equivalent recurring errors trigger a warning.
-5. Commit: `feat: detect repeated command and error loops`.
+1. Test three identical commands with unchanged outcomes inside the repetition window trigger a warning.
+2. Test that the same three occurrences spread beyond the window do not trigger, and that both the time and event bounds are configurable.
+3. Test the same command after changed files or changed result does not automatically trigger.
+4. Test normalization of volatile timestamps/temp paths.
+5. Test three equivalent recurring errors within the window trigger a warning.
+6. Commit: `feat: detect repeated command and error loops`.
 
 ### Task 15: Implement progress and stagnation rules
 
@@ -387,7 +429,7 @@
 
 **Steps:**
 
-1. Test identical loop evidence from both sources becomes one signal with two sources.
+1. Test identical evidence from both sources becomes one signal with two sources, using the context-growth signal, the only field the pinned adapter exposes.
 2. Test highest severity wins.
 3. Test stale AgentLens data is tagged and cannot overwrite newer local evidence.
 4. Commit: `feat: reconcile deterministic health evidence`.
@@ -425,10 +467,17 @@
 
 1. Test first packet with no prior assessment.
 2. Test subsequent packet starts after the prior cursor.
-3. Test event/item/character limits.
-4. Test overflow folding and no source-file bodies by default.
-5. Validate generated packets against `observation.schema.json`.
-6. Commit: `feat: build bounded observation packets`.
+3. Test event/item/character limits and the total budget measured on the final serialized provider request, not on the packet alone.
+4. Prove finiteness structurally: walk both schemas and assert every string has `maxLength`, every array `maxItems`, every numeric `maximum`, and every object with `additionalProperties` a `maxProperties`. This test fails when a future field is added without a cap, which is how the previous gap appeared.
+5. Compute the theoretical worst-case serialized request from the schema caps and assert it is finite. Do not assert it fits the budget: 200 events at 4,000 characters already exceed 48,000, so that assertion is unsatisfiable by construction.
+6. Prove the runtime bound instead: build a request from maximal inputs (goal at `maxLength`, a previous assessment at its own maxima, 200 maximal events, 64 maximal signals with payloads at `maxProperties`) and assert the builder either emits `serialized_size <= 48_000` after eviction or fails closed to a rule-only assessment with no model call. Assert on the bytes handed to the transport, including prompt scaffolding.
+7. Test that every parsed field, `confidence_percent` included, re-serializes within its bound, and that no provider text is passed through verbatim. The pre-parse byte cap is the model client's boundary and is tested in Task 20, where the response is actually read.
+8. Test the documented eviction order, that signals are never evicted, that goal text truncates only after all event classes, and that a packet whose signals and goal exceed the budget fails closed to a rule-only assessment.
+9. Test that `truncation` counts are populated on eviction and zeroed on a complete window.
+10. Test that `system_refs` carries every citable non-event fact and that a `sys:` ID absent from the packet is rejected downstream.
+11. Test overflow folding and no source-file bodies by default.
+12. Validate generated packets against `observation.schema.json`.
+13. Commit: `feat: build bounded observation packets`.
 
 ## Phase 6: Luna/Terra assessment cascade
 
@@ -445,10 +494,13 @@
 **Steps:**
 
 1. Define `assess(model_profile, observation, schema)` interface.
-2. Test OpenAI-compatible structured-output request construction with `respx`.
-3. Test timeout, invalid JSON, schema mismatch, and retry classification.
-4. Ensure no tools are supplied to the assessment model.
-5. Commit: `feat: add structured model assessment client`.
+2. Test OpenAI-compatible structured-output request construction with `respx`, asserting the request carries the wire schema and never the authoritative one.
+3. Test the response transport boundary here, where the client actually reads it. Assert on retained bytes, not on bytes read: at most `model.max_response_bytes` (default 1 MiB, configurable 64 KiB to 8 MiB) reaches the parser, at most one bounded overflow probe is read beyond it, probe bytes are never retained or parsed, and total bytes read in an attempt are at most `cap + chunk_size`. Use responses of exactly `cap` and `cap + 1` bytes with no `Content-Length`, since those are indistinguishable until the probe.
+4. Test that an oversized response is classified non-retryable and fails closed to a rule-only assessment, and that the cumulative ceiling `(retry_budget + 1) x (cap + chunk_size)` bounds all attempts together.
+5. Test that a response valid under the wire schema but violating an authoritative bound is rejected and takes the retry path.
+6. Test timeout, invalid JSON, schema mismatch, and retry classification.
+7. Ensure no tools are supplied to the assessment model.
+8. Commit: `feat: add structured model assessment client`.
 
 ### Task 21: Implement Luna assessment
 
@@ -478,15 +530,23 @@
 - Create: `src/codex_watchtower/assess/terra.py`
 - Create: `src/codex_watchtower/assess/policy.py`
 - Create: `tests/unit/assess/test_policy.py`
+- Create: `tests/unit/assess/test_reconciled_schema.py`
 
 **Steps:**
 
-1. Parametrize every escalation trigger from the specification.
-2. Verify healthy/high-confidence Luna results do not call Terra.
-3. Verify deterministic critical signals force attention despite reassuring model output.
-4. Verify Terra prose supersedes Luna only when valid.
-5. Verify timeout falls back to deterministic assessment.
-6. Commit: `feat: add terra escalation policy`.
+1. Parametrize every escalation trigger from the specification, keeping `goal_alignment` and `status` triggers distinct.
+2. Verify healthy Luna results do not call Terra, and that `confidence_percent` alone never triggers escalation.
+3. Verify advisory mode structurally against `schemas/reconciled_assessment.schema.json`: the reconciler emits `state`, `status`, and `notification_status`; only the first and third are derivable without model output, and no model-narrowed status reaches the notifier. Assert the reconciled result validates and that `assessment.schema.json` alone cannot represent it, so the boundary stays a contract rather than a convention.
+4. Test that a reconciled result with `model_assessment: null` is valid and fully populated, which is the rule-only and budget-exhausted path.
+5. Add negative fixtures for every combination the projection forbids, each asserted invalid against the committed schema: `state=idle` with `status=terminal_failed` or `notification_status=identity_broken`; `state=idle` with a non-provisional report; a terminal state with `run_id=null`; and `report_version=1` with a non-null `supersedes`.
+6. Test the domain invariants JSON Schema cannot express: `supersedes < report_version` with a chain that never reuses or decreases a version, and `signal_fingerprint` equal to the canonical digest of `active_signals`, including that a mismatched digest is rejected.
+7. Add negative fixtures for the relations now encoded in the schema: `notification_status` of `stalled`, `looping`, or `off_scope` with no matching signal kind in `active_signals`; an active critical signal with `needs_attention: false`; `fatal` set without `identity_broken`; `identity_broken` without `fatal`; an empty-string `run_id` on a terminal result; a `fatal` with no active critical signal; a `prefix_mismatch` without a critical `dependency_unavailable` signal or without a detail naming the file; and each `*_exhausted` reason paired with a counter below its maximum.
+8. Test the fatal path end to end from a saturated `status_epoch`: the session enters `fatal` out of band, epochs freeze, and the message deduplicates on `session_id + "fatal" + reason` with no epoch in the key.
+9. Verify deterministic critical signals force attention despite reassuring model output.
+10. Verify Terra prose supersedes Luna only when valid.
+11. Verify timeout falls back to deterministic assessment.
+12. Verify both epochs: `status_epoch` advances only on a `notification_status` change, `attention_epoch` only on a deterministic `needs_attention` false-to-true transition, and neither is advanced by model output.
+13. Commit: `feat: add terra escalation policy`.
 
 ### Task 23: Schedule assessments by evidence change
 
@@ -520,7 +580,7 @@
 **Steps:**
 
 1. Write failing tests for all specified endpoints.
-2. Implement pagination/cursors and JSON schema-compatible responses.
+2. Implement pagination over the per-session event sequence, and return session and assessment routes as `reconciled_assessment.schema.json` payloads; assert no route exposes a tailer file cursor.
 3. Implement SSE state transitions with reconnect cursor support.
 4. Assert the default bind is `127.0.0.1`.
 5. Disable POST assessment unless an operator token is configured; test bearer auth, strict Origin/Host checks, no wildcard CORS, idempotency, rate/cost budgets, and concurrency limits.
@@ -561,11 +621,17 @@
 **Steps:**
 
 1. Add golden messages for warning, waiting, terminal failure, and terminal completion states.
-2. Test transition policy and concern fingerprinting.
-3. Test changed prose with identical evidence is suppressed.
-4. Test critical evidence always includes a factual reason and event cursor.
-5. Apply trusted-remote redaction, path minimization, Telegram markup escaping, `chat_id` allowlisting, and omission of prompts/output/local links.
-6. Commit: `feat: render deduplicated operator notifications`.
+2. Test transition policy and `signal_fingerprint` over `(severity, kind, signal_id)` triples taken from the rule engine, not from assessment concerns.
+3. Test the advisory guarantee: Luna reporting `looping` with no corresponding rule signal changes the displayed status and message body but sends nothing.
+4. Test `status_epoch`: a `waiting -> active_turn -> waiting` cycle sends twice, while repeats inside one episode send once.
+5. Test `attention_epoch`: a signal that activates, clears, and reactivates while `notification_status` stays `progressing` sends twice, since each is a distinct `needs_attention` false-to-true transition. This is the case `status_epoch` alone does not cover.
+6. Test that entering `identity_broken` always sends, including when `needs_attention` was already true from an unrelated signal so no false-to-true transition occurs. Ingestion has stopped, and an operator must never silently lose monitoring of a session.
+7. Test changed prose with identical evidence is suppressed.
+8. Test that an advanced event cursor alone does not change the deduplication key, and that a restart replaying the same window sends nothing.
+9. Test the critical-signal cooldown resend and the digest path.
+10. Test critical evidence always includes a factual reason and event cursor in the body.
+11. Apply trusted-remote redaction, path minimization, Telegram markup escaping, `chat_id` allowlisting, and omission of prompts/output/local links.
+12. Commit: `feat: render deduplicated operator notifications`.
 
 ### Task 27: Add Telegram Bot API notifier
 
@@ -602,8 +668,9 @@
 1. Test safe defaults: loopback bind, Telegram off, AgentLens optional, remote model trust not assumed.
 2. Test invalid threshold/model/endpoint combinations fail at startup.
 3. Document Luna/Terra profile mapping without hard-coding deployment-specific names.
-4. Require explicit consent before first remote transmission and validate HTTPS allowlist, redirect/SSRF policy, proxy handling, response limits, retry budget, and provider retention policy.
-5. Commit: `feat: add safe watchtower configuration`.
+4. Test the packet character budget, `model.max_response_bytes` and its 64 KiB to 8 MiB range, the per-session assessment ceiling, and the daily cost ceiling, including that a breach stops model calls, emits `dependency_unavailable` with reason `budget_exhausted`, and leaves deterministic notification intact.
+5. Require explicit consent before first remote transmission and validate HTTPS allowlist, redirect/SSRF policy, proxy handling, response limits, retry budget, and provider retention policy.
+6. Commit: `feat: add safe watchtower configuration`.
 
 ### Task 29: Add service CLI and systemd unit
 
@@ -618,7 +685,7 @@
 
 **Steps:**
 
-1. Add `watchtower serve`, `watchtower inspect`, `watchtower assess`, and `watchtower doctor`.
+1. Add `watchtower serve`, `watchtower run`, `watchtower inspect`, `watchtower assess`, and `watchtower doctor`.
 2. Test `doctor` against missing Codex root, unavailable AgentLens, invalid model config, and healthy local setup.
 3. Ensure service hardening includes no root user, private temp, restart policy, and explicit environment file.
 4. Document backup/recovery of the SQLite state.
@@ -642,6 +709,8 @@
 4. Commit: `feat: instrument watchtower safely`.
 
 ## Phase 10: Replay corpus and model calibration
+
+Phase 10 gates v0.2.0, not v0.1.0. v0.1.0 ships in advisory mode per specification section 10.3: deterministic rules notify on their own and no notification decision depends on model output, so the corpus is not on the first release's critical path. Tasks 31 and 32 may begin as soon as completed sessions accumulate.
 
 ### Task 31: Build redacted replay fixture tooling
 
@@ -703,8 +772,9 @@
 4. Run smoke only; review cost/latency/results with the operator.
 5. After approval, run full evaluation and write a dated report.
 6. Enforce the release gates from the specification.
-7. If Terra fails to improve ambiguous cases by ten percentage points, disable automatic escalation and document the decision.
-8. Commit: `eval: calibrate luna and terra assessment cascade`.
+7. Report the ambiguous-case count alongside any accuracy comparison, and refuse to emit a percentage-point verdict below 30 ambiguous cases.
+8. Decide keep-or-remove for the cascade from the reviewed disagreement set with recorded rationale and reviewer sign-off; if Terra does not improve ambiguous cases, disable automatic escalation and document it.
+9. Commit: `eval: calibrate luna and terra assessment cascade`.
 
 ## Phase 11: End-to-end verification and release
 
@@ -720,11 +790,13 @@
 **Steps:**
 
 1. Replay timestamped events under a fake clock.
-2. Restart Watchtower midway.
-3. Verify each normalized event and notification appears exactly once.
-4. Verify only incremental windows reach the model client.
-5. Verify completion report contents.
-6. Commit: `test: verify restart-safe autonomous run replay`.
+2. Replay the idle/reopen case end to end: the grace period expires, a provisional report is sent, a new turn is appended, the session reopens exactly once, the supersede notice references the superseded report version, and the stale idle dedup entry suppresses no alert in the reopened episode.
+3. Replay the resume case end to end: a wrapped `codex exec --json` exits 0 and reports `terminal_completed` for that execution, then a wrapped `codex exec resume <same-session-id> --json` appends to the same rollout. Assert no event is lost or duplicated, the session reopens to `active_turn` with the next `execution_epoch`, and the earlier report is superseded by version rather than left standing as final.
+4. Restart Watchtower midway.
+5. Verify each normalized event and notification appears exactly once.
+6. Verify only incremental windows reach the model client.
+7. Verify report contents and version chain across both reopen paths.
+8. Commit: `test: verify restart-safe autonomous run replay`.
 
 ### Task 35: Test degraded dependencies
 
@@ -778,7 +850,7 @@
 **Steps:**
 
 1. Verify clean worktree and remote CI success.
-2. Create `v0.1.0` release notes referencing the calibration and acceptance reports.
+2. Create `v0.1.0` release notes referencing the acceptance report, stating that model output is advisory and that calibration gates v0.2.0.
 3. Tag and publish the release.
 4. Install from the released artifact in a clean environment.
 5. Run `watchtower doctor` and one synthetic replay.
@@ -786,6 +858,7 @@
 ## Execution order and review gates
 
 - Phases 0–5 can proceed without paid inference.
+- v0.1.0 requires Phases -1 through 9 in advisory mode. Phase 10 and acceptance criterion 12 gate v0.2.0.
 - Before Phase 6, verify the actual Luna/Terra provider interface and structured-output support with isolated smoke requests.
 - Before Task 32 full corpus generation or Task 33 full evaluation, run the five-session smoke and obtain approval for the long/paid run.
 - Before enabling Telegram against a real chat, test against a local/mock endpoint and inspect rendered messages.
@@ -797,7 +870,8 @@ Implementation is complete only when:
 
 - every MVP acceptance criterion has fresh evidence;
 - the full deterministic suite passes;
-- the model calibration report passes its gates or the system fails closed to rule-only mode;
+- for v0.1.0, model output is advisory and no notification depends on it;
+- for v0.2.0, the model calibration report passes its promotion gates or the system stays advisory;
 - restart and degraded-service E2E tests pass;
 - CI is green on the pushed commit;
 - a clean install of the release reproduces the smoke test.

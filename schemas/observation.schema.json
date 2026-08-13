@@ -4,94 +4,479 @@
   "title": "WatchtowerObservation",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "session", "goal", "window", "previous_assessment", "events", "signals", "redactions"],
+  "required": [
+    "schema_version",
+    "session",
+    "goal",
+    "window",
+    "previous_assessment",
+    "events",
+    "signals",
+    "system_refs",
+    "redactions",
+    "truncation"
+  ],
   "properties": {
-    "schema_version": { "const": "1.0" },
+    "schema_version": {
+      "const": "1.0"
+    },
     "session": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "workspace", "started_at", "elapsed_seconds", "state"],
+      "required": [
+        "id",
+        "workspace",
+        "started_at",
+        "elapsed_seconds",
+        "state"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "workspace": { "type": "string" },
-        "started_at": { "type": "string", "format": "date-time" },
-        "elapsed_seconds": { "type": "integer", "minimum": 0 },
-        "state": { "enum": ["active_turn", "between_turns", "waiting", "terminal_completed", "terminal_failed", "unknown"] },
-        "model": { "type": ["string", "null"] }
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "workspace": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 40
+        },
+        "elapsed_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 31536000
+        },
+        "state": {
+          "enum": [
+            "active_turn",
+            "between_turns",
+            "waiting",
+            "terminal_completed",
+            "terminal_failed",
+            "idle",
+            "identity_broken",
+            "unknown"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 200
+        }
       }
     },
     "goal": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["text", "acceptance_criteria"],
+      "required": [
+        "text",
+        "acceptance_criteria"
+      ],
       "properties": {
-        "text": { "type": "string", "minLength": 1 },
-        "expected_paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-        "forbidden_paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-        "acceptance_criteria": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "expected_paths": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "uniqueItems": true
+        },
+        "forbidden_paths": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "uniqueItems": true
+        },
+        "acceptance_criteria": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        }
       }
     },
     "window": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["from_cursor", "to_cursor", "opened_at", "closed_at"],
+      "description": "Cursors are per-session event sequence values, not tailer file cursors.",
+      "required": [
+        "from_cursor",
+        "to_cursor",
+        "opened_at",
+        "closed_at"
+      ],
       "properties": {
-        "from_cursor": { "type": ["string", "null"] },
-        "to_cursor": { "type": "string", "minLength": 1 },
-        "opened_at": { "type": "string", "format": "date-time" },
-        "closed_at": { "type": "string", "format": "date-time" }
+        "from_cursor": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "to_cursor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "opened_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 40
+        },
+        "closed_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 40
+        }
       }
     },
     "previous_assessment": {
       "oneOf": [
-        { "type": "null" },
-        { "$ref": "assessment.schema.json" }
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "assessment.schema.json"
+        }
       ]
     },
     "events": {
       "type": "array",
       "maxItems": 200,
-      "items": { "$ref": "#/$defs/event" }
+      "items": {
+        "$ref": "#/$defs/event"
+      }
     },
     "signals": {
       "type": "array",
-      "items": { "$ref": "#/$defs/signal" }
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/signal"
+      }
+    },
+    "system_refs": {
+      "description": "Citable facts that are neither events nor signals. An assessment using ref_type \"system\" must cite an id present here.",
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "summary"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^sys:[a-z0-9_.-]+$",
+            "maxLength": 128
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      },
+      "uniqueItems": true
     },
     "redactions": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 },
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      },
       "uniqueItems": true
+    },
+    "truncation": {
+      "description": "Budget accounting for this packet. Present even when nothing was evicted, so an assessor can always tell a complete window from a truncated one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "budget_characters",
+        "used_characters",
+        "evicted"
+      ],
+      "properties": {
+        "budget_characters": {
+          "description": "Total serialized character budget for the whole provider request, including goal and previous_assessment.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "used_characters": {
+          "description": "Serialized size of the whole provider request. The domain layer enforces used_characters <= budget_characters, which JSON Schema cannot express.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000000
+        },
+        "evicted": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file_read",
+            "reasoning",
+            "command_output",
+            "events"
+          ],
+          "properties": {
+            "file_read": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "reasoning": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "command_output": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "events": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
     "event": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "timestamp", "kind", "summary"],
+      "required": [
+        "id",
+        "timestamp",
+        "kind",
+        "summary"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "kind": { "enum": ["message", "reasoning", "command", "command_result", "file_read", "file_changed", "test_result", "error", "turn_lifecycle", "process_lifecycle", "unknown"] },
-        "summary": { "type": "string", "maxLength": 4000 },
-        "path": { "type": ["string", "null"] },
-        "exit_code": { "type": ["integer", "null"] },
-        "source_type": { "type": ["string", "null"] }
-      }
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 40
+        },
+        "kind": {
+          "enum": [
+            "message",
+            "reasoning",
+            "command",
+            "command_result",
+            "file_read",
+            "file_changed",
+            "test_result",
+            "error",
+            "turn_lifecycle",
+            "process_lifecycle",
+            "unknown"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 512
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -256,
+          "maximum": 65535
+        },
+        "source_type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "run_id": {
+          "description": "Execution this event belongs to, or null when no execution is bound. Process lifecycle events must carry it; §5.8 accepts a terminal transition only from evidence whose run_id is the session's current execution.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "execution_epoch": {
+          "description": "Ordinal of that execution within the session, or null when no execution is bound.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100000
+        }
+      },
+      "allOf": [
+        {
+          "title": "a process lifecycle event must identify the execution it reports on",
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "process_lifecycle"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "run_id",
+              "execution_epoch",
+              "exit_code"
+            ],
+            "properties": {
+              "run_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "execution_epoch": {
+                "type": "integer"
+              },
+              "exit_code": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      ]
     },
     "signal": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "severity", "source", "event_ids", "observed_at", "freshness", "summary", "payload"],
+      "required": [
+        "id",
+        "kind",
+        "severity",
+        "source",
+        "event_ids",
+        "observed_at",
+        "freshness",
+        "summary",
+        "payload"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "kind": { "enum": ["repeated_command", "recurring_error", "stagnation", "scope_expansion", "forbidden_path", "waiting", "turn_failed", "process_failed", "test_regression", "context_growth", "agentlens_finding", "dependency_unavailable", "other"] },
-        "severity": { "enum": ["info", "warning", "critical"] },
-        "source": { "enum": ["local_rule", "agentlens", "system"] },
-        "event_ids": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
-        "observed_at": { "type": "string", "format": "date-time" },
-        "freshness": { "enum": ["current", "stale", "unknown"] },
-        "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
-        "payload": { "type": "object", "additionalProperties": true }
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "kind": {
+          "enum": [
+            "repeated_command",
+            "recurring_error",
+            "stagnation",
+            "scope_expansion",
+            "forbidden_path",
+            "waiting",
+            "turn_failed",
+            "process_failed",
+            "test_regression",
+            "context_growth",
+            "agentlens_finding",
+            "dependency_unavailable",
+            "other"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "critical"
+          ]
+        },
+        "source": {
+          "enum": [
+            "local_rule",
+            "agentlens",
+            "system"
+          ]
+        },
+        "event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "uniqueItems": true,
+          "maxItems": 64
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 40
+        },
+        "freshness": {
+          "enum": [
+            "current",
+            "stale",
+            "unknown"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "payload": {
+          "description": "Bounded scalar map. Nested objects and arrays are rejected so a payload cannot grow without limit; render structure into the summary instead.",
+          "type": "object",
+          "maxProperties": 24,
+          "additionalProperties": {
+            "description": "String, bounded integer, boolean, or null. Floating-point values are excluded because JSON gives them no serialization-length bound; render a ratio as a bounded string instead.",
+            "type": [
+              "string",
+              "integer",
+              "boolean",
+              "null"
+            ],
+            "maxLength": 500,
+            "minimum": -1000000000000,
+            "maximum": 1000000000000
+          }
+        }
       }
     }
   }

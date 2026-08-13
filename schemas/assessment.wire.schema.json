@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/ya-yara/codex-watchtower/schemas/assessment.schema.json",
-  "title": "WatchtowerAssessment",
+  "$id": "https://github.com/ya-yara/codex-watchtower/schemas/assessment.wire.schema.json",
+  "title": "WatchtowerAssessmentWire",
+  "description": "Provider-facing projection of assessment.schema.json for strict structured output. Conservative lowest-common-denominator: every object sets additionalProperties false and lists all properties in required, and keywords commonly unsupported by strict modes (const, format, minLength, maxLength, minimum, maximum, minItems, maxItems, uniqueItems, oneOf, external $ref) are omitted. Per-deployment support is not yet established; Task 0C records the capability matrix and the projection may be relaxed per deployment afterwards. Constraints removed here are not relaxed in effect: assessment.schema.json remains authoritative and every response is validated against it after parsing. Both files must be regenerated together; CI asserts they stay structurally aligned.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -22,7 +23,9 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "1.0"
+      "enum": [
+        "1.0"
+      ]
     },
     "status": {
       "enum": [
@@ -41,8 +44,7 @@
     },
     "current_action": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 500
+      "description": "One sentence, at most 500 characters."
     },
     "goal_alignment": {
       "enum": [
@@ -54,27 +56,21 @@
     },
     "evidence": {
       "type": "array",
-      "minItems": 1,
-      "maxItems": 12,
+      "description": "Between 1 and 12 items. Every ref_id must appear in the observation packet.",
       "items": {
         "$ref": "#/$defs/evidence"
       }
     },
     "basis_ids": {
-      "description": "Evidence refs supporting status, current_action, and goal_alignment; validated semantically against evidence[].ref_id.",
       "type": "array",
-      "minItems": 1,
+      "description": "At least one ref_id from evidence[], supporting status, current_action, and goal_alignment.",
       "items": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 128
-      },
-      "uniqueItems": true,
-      "maxItems": 12
+        "type": "string"
+      }
     },
     "concerns": {
       "type": "array",
-      "maxItems": 8,
+      "description": "At most 8 items. Empty when nothing is concerning.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -108,19 +104,14 @@
           },
           "explanation": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 1000
+            "description": "At most 1000 characters."
           },
           "evidence_refs": {
             "type": "array",
-            "minItems": 1,
+            "description": "At least one ref_id from evidence[].",
             "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128
-            },
-            "uniqueItems": true,
-            "maxItems": 12
+              "type": "string"
+            }
           }
         }
       }
@@ -133,13 +124,11 @@
         "string",
         "null"
       ],
-      "maxLength": 1000
+      "description": "At most 1000 characters, or null."
     },
     "confidence_percent": {
-      "description": "Confidence as an integer percentage. A fixed-point integer replaces the former 0..1 float because a JSON number has no token-length bound: 0 <= confidence <= 1 admits an arbitrarily long literal, so the float could not be part of a finite schema bound.",
       "type": "integer",
-      "minimum": 0,
-      "maximum": 100
+      "description": "Integer 0-100. Confidence as a percentage; not a fraction."
     },
     "assessed_by": {
       "enum": [
@@ -153,21 +142,18 @@
         "string",
         "null"
       ],
-      "maxLength": 500
+      "description": "At most 500 characters, or null."
     },
     "event_cursor": {
-      "description": "Per-session event sequence value the assessment was made at, not a tailer file cursor.",
+      "description": "Per-session event sequence value, or null.",
       "type": [
         "integer",
         "null"
-      ],
-      "minimum": 0,
-      "maximum": 1000000000
+      ]
     },
     "assessed_at": {
       "type": "string",
-      "format": "date-time",
-      "maxLength": 40
+      "description": "RFC 3339 timestamp."
     }
   },
   "$defs": {
@@ -188,14 +174,11 @@
           ]
         },
         "ref_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
+          "type": "string"
         },
         "claim": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 500
+          "description": "At most 500 characters."
         }
       }
     }
