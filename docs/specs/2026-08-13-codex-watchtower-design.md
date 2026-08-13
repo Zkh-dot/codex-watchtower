@@ -130,6 +130,10 @@ The parser reads only complete newline-terminated JSON records. Its cursor inclu
 <device>:<inode>:<byte-offset>:<checkpoint-hash>
 ```
 
+This ingest cursor is internal. It is persisted in `event_cursors` and never leaves the process: device and inode numbers are host details, they change under the rotation and copy-truncate cases this section already handles, and a client holding one would be broken by any of them.
+
+Everything outside the tailer uses a separate **event sequence**: a monotonic per-session integer assigned at normalization and stored with each event. The API `after=` parameter, the observation window `from_cursor`/`to_cursor`, the assessment `event_cursor`, and notification provenance all carry the event sequence. It is stable across restarts, rotation, and replay, because it is derived from the stable event ID ordering rather than from file layout.
+
 Requirements:
 
 - never process a partial final line;
@@ -152,8 +156,11 @@ The normalizer converts version-specific Codex records into `WatchtowerEvent` va
 - `file_changed`
 - `test_result`
 - `error`
-- `lifecycle`
+- `turn_lifecycle`
+- `process_lifecycle`
 - `unknown`
+
+Turn and process lifecycle are separate kinds, not one `lifecycle` kind. §5.8 and §5.11 depend on the distinction: a turn boundary comes from the transcript and can only produce `between_turns`, while a process boundary comes from outside it and is the only thing that can produce a confirmed terminal state.
 
 Each event has a stable ID, timestamp, short factual summary, source type, and optional path/exit code. It must not ask a model to parse events that can be parsed deterministically. Domain validation additionally enforces RFC 3339 timestamps, unique and monotonic event IDs/times, `opened_at <= closed_at`, cursor consistency, and event timestamps within the declared window; JSON Schema alone cannot express all of these invariants.
 
@@ -179,16 +186,19 @@ AgentLens outages set `agentlens_available=false`; they do not halt ingestion or
 
 Rules generate evidence-backed signals before model invocation. Initial rules:
 
-- identical normalized command repeated at least three times without a changed outcome;
-- same normalized error repeated at least three times;
+- identical normalized command repeated at least three times within the repetition window without a changed outcome;
+- same normalized error repeated at least three times within the repetition window;
 - worsening focused-test result;
 - no progress marker for a configurable interval, default 25 minutes;
 - file changes under explicitly forbidden paths;
 - unexpected path expansion outside configured expected paths;
 - waiting for input or approval;
 - failed process or task lifecycle;
-- critical AgentLens loop signal;
-- context growth marked critical by AgentLens.
+- context growth marked critical by AgentLens, only while the adapter in §5.4 is enabled.
+
+Repetition rules are windowed: the default window is 30 minutes or 60 normalized events, whichever is smaller, and both bounds are configurable. Without a window, three occurrences spread across a two-hour session would raise the same signal as three in ninety seconds, and the rule would fire more readily the longer a healthy session ran.
+
+An AgentLens loop signal is deliberately absent. §5.4 records that loop, error, file, tool, and outcome fields are unavailable from the pinned Codex adapter, so a rule consuming them could never fire. It may be added once a version-pinned fixture proves those fields exist, under the same gate as any other enrichment.
 
 A progress marker is one of:
 
@@ -209,7 +219,10 @@ The packet conforms to `schemas/observation.schema.json` and always contains:
 - previous assessment, explicitly `null` for the first packet;
 - only events since the previous cursor;
 - compact deterministic signals;
+- system references available for citation;
 - redaction-class report, explicitly empty when nothing was removed.
+
+Assessments may cite `ref_type: "system"`, and §5.8 invalidates any unsupported reference, so the citable system IDs must be transmitted rather than assumed. The packet carries an explicit `system_refs` array of `{id, summary}` records covering facts that are neither events nor signals: elapsed time, session state, degraded dependencies, budget exhaustion, and window truncation. IDs use the `sys:` prefix and are stable within a packet. A model citing a `sys:` ID absent from the packet is invalid, exactly as with event and signal IDs.
 
 Deterministic signals are structured records with stable ID, kind, severity, source, evidence event IDs, observation time, freshness, summary, and typed payload. Empty acceptance criteria are represented as `[]`; the field is never omitted.
 
@@ -288,6 +301,24 @@ The reconciler produces the authoritative assessment:
 7. terminal failure requires non-zero process exit evidence from §5.11 or an explicit deterministic process failure rule;
 8. for an unobserved session, where no process evidence exists, the quiet grace period alone yields `terminal_completed_unconfirmed`, which notifies and closes the run report but is never reported as a confirmed outcome.
 
+#### Session state and assessment status
+
+The two enums are distinct and neither replaces the other. Session `state` is deterministic lifecycle, owned by §5.1 and §5.11 and derived only from explicit evidence. Assessment `status` is the reconciled operator-facing verdict, owned by the reconciler and consumed by §5.9 and §5.10.
+
+The projection is fixed, and the reconciler applies it before any model output is considered:
+
+| Session state | Assessment status |
+| --- | --- |
+| `active_turn` | `progressing`, or `investigating`, `stalled`, `looping`, `off_scope` when a rule or model narrows it |
+| `between_turns` | `between_turns` |
+| `waiting` | `waiting` |
+| `terminal_completed` | `terminal_completed` |
+| `terminal_completed_unconfirmed` | `terminal_completed_unconfirmed` |
+| `terminal_failed` | `terminal_failed` |
+| `unknown` | `unknown` |
+
+`progressing`, `investigating`, `stalled`, `looping`, and `off_scope` are refinements of `active_turn` only. A model may narrow within the row its session state permits; it may never move the status to a different row. Terminal and waiting states are therefore never model-assigned, and a reassuring assessment cannot promote a session out of `terminal_failed`.
+
 ### 5.9 Status and operator API
 
 Local bind only by default: `127.0.0.1`.
@@ -297,7 +328,7 @@ Proposed endpoints:
 - `GET /healthz`
 - `GET /api/v1/sessions`
 - `GET /api/v1/sessions/{id}`
-- `GET /api/v1/sessions/{id}/events?after=<cursor>`
+- `GET /api/v1/sessions/{id}/events?after=<event_sequence>`
 - `GET /api/v1/sessions/{id}/assessment`
 - `POST /api/v1/sessions/{id}/assess` for an authenticated, rate-limited operator-requested Terra escalation
 - `GET /api/v1/events` for SSE state updates.

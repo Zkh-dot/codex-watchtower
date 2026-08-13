@@ -41,7 +41,7 @@
     "confidence": { "type": "number", "description": "Between 0 and 1 inclusive." },
     "assessed_by": { "enum": ["luna", "terra", "rules"] },
     "escalation_reason": { "type": ["string", "null"], "description": "At most 500 characters, or null." },
-    "event_cursor": { "type": ["string", "null"] },
+    "event_cursor": { "description": "Per-session event sequence value, or null.", "type": ["integer", "null"] },
     "assessed_at": { "type": "string", "description": "RFC 3339 timestamp." }
   },
   "$defs": {

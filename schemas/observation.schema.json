@@ -4,7 +4,7 @@
   "title": "WatchtowerObservation",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "session", "goal", "window", "previous_assessment", "events", "signals", "redactions", "truncation"],
+  "required": ["schema_version", "session", "goal", "window", "previous_assessment", "events", "signals", "system_refs", "redactions", "truncation"],
   "properties": {
     "schema_version": { "const": "1.0" },
     "session": {
@@ -34,10 +34,11 @@
     "window": {
       "type": "object",
       "additionalProperties": false,
+      "description": "Cursors are per-session event sequence values, not tailer file cursors.",
       "required": ["from_cursor", "to_cursor", "opened_at", "closed_at"],
       "properties": {
-        "from_cursor": { "type": ["string", "null"] },
-        "to_cursor": { "type": "string", "minLength": 1 },
+        "from_cursor": { "type": ["integer", "null"], "minimum": 0 },
+        "to_cursor": { "type": "integer", "minimum": 0 },
         "opened_at": { "type": "string", "format": "date-time" },
         "closed_at": { "type": "string", "format": "date-time" }
       }
@@ -56,6 +57,20 @@
     "signals": {
       "type": "array",
       "items": { "$ref": "#/$defs/signal" }
+    },
+    "system_refs": {
+      "description": "Citable facts that are neither events nor signals. An assessment using ref_type \"system\" must cite an id present here.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "summary"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^sys:[a-z0-9_.-]+$" },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      },
+      "uniqueItems": true
     },
     "redactions": {
       "type": "array",

@@ -135,9 +135,10 @@
 
 1. Write tests for enum values, assessment confidence bounds, unique evidence references, and schema serialization.
 2. Implement Pydantic models matching the committed JSON Schemas.
-3. Enforce RFC 3339 timestamps, `opened_at <= closed_at`, cursor consistency, unique/monotonic event IDs and timestamps, events inside the window, and assessment references resolving to packet event/signal/system IDs.
-4. Verify serialized fixtures with `jsonschema[format]` and `FormatChecker`.
-5. Commit: `feat: add typed watchtower domain model`.
+3. Enforce RFC 3339 timestamps, `opened_at <= closed_at`, cursor consistency, unique/monotonic event IDs and timestamps, events inside the window, and assessment references resolving to packet event, signal, or `system_refs` IDs.
+4. Test the session-state to assessment-status projection: each state permits only its documented statuses, and a model narrowing within `active_turn` is accepted while a cross-row move is rejected.
+5. Verify serialized fixtures with `jsonschema[format]` and `FormatChecker`.
+6. Commit: `feat: add typed watchtower domain model`.
 
 ### Task 4: Create SQLite migrations and repository interface
 
@@ -212,8 +213,9 @@
 4. Test inode replacement, truncation, inode reuse, copy-truncate, fast regrowth beyond the old offset, prefix mismatch, and migration between devices.
 5. On mismatch, replay from the last verified newline checkpoint or file start and deduplicate by stable event ID.
 6. Reject symlinks escaping the root, non-regular files, wrong-owner files, FIFO/devices, and configured oversize limits; verify identity again after open.
-7. Implement the cursor `<device>:<inode>:<offset>:<checkpoint-hash>`.
-8. Commit: `feat: tail codex rollouts incrementally`.
+7. Implement the internal cursor `<device>:<inode>:<offset>:<checkpoint-hash>` and assert it is never returned by any API route or embedded in an observation, assessment, or notification.
+8. Assign the monotonic per-session event sequence used by the API, observation windows, and assessments; test that it survives restart, rotation, and replay unchanged.
+9. Commit: `feat: tail codex rollouts incrementally`.
 
 ### Task 8: Normalize known and unknown Codex events
 
@@ -232,7 +234,8 @@
 3. Implement stable event ID generation from session ID, source offset, type, and payload hash.
 4. Redact before persistence, bound command output, and retain only redacted summary plus source hash/original byte length.
 5. Ensure unknown events become `kind=unknown` with source type preserved.
-6. Commit: `feat: normalize codex rollout events`.
+6. Test that turn boundaries normalize to `turn_lifecycle` and process boundaries to `process_lifecycle`, and that no single `lifecycle` kind is emitted.
+7. Commit: `feat: normalize codex rollout events`.
 
 ### Task 9: Classify lifecycle without model inference
 
@@ -359,11 +362,12 @@
 
 **Steps:**
 
-1. Test three identical commands with unchanged outcomes trigger a warning.
-2. Test the same command after changed files or changed result does not automatically trigger.
-3. Test normalization of volatile timestamps/temp paths.
-4. Test three equivalent recurring errors trigger a warning.
-5. Commit: `feat: detect repeated command and error loops`.
+1. Test three identical commands with unchanged outcomes inside the repetition window trigger a warning.
+2. Test that the same three occurrences spread beyond the window do not trigger, and that both the time and event bounds are configurable.
+3. Test the same command after changed files or changed result does not automatically trigger.
+4. Test normalization of volatile timestamps/temp paths.
+5. Test three equivalent recurring errors within the window trigger a warning.
+6. Commit: `feat: detect repeated command and error loops`.
 
 ### Task 15: Implement progress and stagnation rules
 
@@ -412,7 +416,7 @@
 
 **Steps:**
 
-1. Test identical loop evidence from both sources becomes one signal with two sources.
+1. Test identical evidence from both sources becomes one signal with two sources, using the context-growth signal, the only field the pinned adapter exposes.
 2. Test highest severity wins.
 3. Test stale AgentLens data is tagged and cannot overwrite newer local evidence.
 4. Commit: `feat: reconcile deterministic health evidence`.
@@ -453,9 +457,10 @@
 3. Test event/item/character limits and the total packet character budget.
 4. Test the documented eviction order, that signals are never evicted, and that a packet whose signals exceed the budget fails closed to a rule-only assessment.
 5. Test that `truncation` counts are populated on eviction and zeroed on a complete window.
-6. Test overflow folding and no source-file bodies by default.
-7. Validate generated packets against `observation.schema.json`.
-8. Commit: `feat: build bounded observation packets`.
+6. Test that `system_refs` carries every citable non-event fact and that a `sys:` ID absent from the packet is rejected downstream.
+7. Test overflow folding and no source-file bodies by default.
+8. Validate generated packets against `observation.schema.json`.
+9. Commit: `feat: build bounded observation packets`.
 
 ## Phase 6: Luna/Terra assessment cascade
 
@@ -548,7 +553,7 @@
 **Steps:**
 
 1. Write failing tests for all specified endpoints.
-2. Implement pagination/cursors and JSON schema-compatible responses.
+2. Implement pagination over the per-session event sequence and JSON schema-compatible responses; assert no route exposes a tailer file cursor.
 3. Implement SSE state transitions with reconnect cursor support.
 4. Assert the default bind is `127.0.0.1`.
 5. Disable POST assessment unless an operator token is configured; test bearer auth, strict Origin/Host checks, no wildcard CORS, idempotency, rate/cost budgets, and concurrency limits.
