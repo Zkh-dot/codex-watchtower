@@ -334,7 +334,8 @@
             "string",
             "null"
           ],
-          "maxLength": 128
+          "maxLength": 128,
+          "minLength": 1
         },
         "execution_epoch": {
           "description": "Ordinal of that execution within the session, or null when no execution is bound.",
@@ -367,7 +368,8 @@
             ],
             "properties": {
               "run_id": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1
               },
               "execution_epoch": {
                 "type": "integer"

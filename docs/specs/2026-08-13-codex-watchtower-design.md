@@ -193,7 +193,7 @@ Some invariants are cross-field or cross-collection and cannot be written in JSO
 - `execution_epoch` and `run_id` either both null or both set;
 - `signal_fingerprint` equal to the canonical digest of `active_signals`, which JSON Schema cannot recompute.
 
-Encoded directly in `schemas/reconciled_assessment.schema.json` rather than listed here, because they are finite implications: a rule-derived `notification_status` requires a matching signal kind in `active_signals`, an active critical signal forces `needs_attention`, a `process_lifecycle` event requires `run_id`, `execution_epoch`, and `exit_code`, and `fatal` and `identity_broken` require each other.
+Encoded directly in `schemas/reconciled_assessment.schema.json` rather than listed here, because they are finite implications: a rule-derived `notification_status` requires a matching signal kind in `active_signals`; an active critical signal forces `needs_attention`; a `process_lifecycle` event requires a non-empty `run_id`, an `execution_epoch`, and an `exit_code`; `fatal` and `identity_broken` require each other; every `fatal` carries an active critical signal and `needs_attention`; `prefix_mismatch` carries a critical `dependency_unavailable` signal and a non-empty detail naming the file; and each `*_exhausted` reason requires its own counter to be at its committed maximum, so an exhaustion cannot be reported for a counter that has not exhausted.
 
 The rule is that a guarantee stated in the specification is either expressible in a committed schema and encoded there, or listed here with a test. It is not left to prose.
 
@@ -568,7 +568,18 @@ Repository files, command output, logs, and agent messages are untrusted data. T
 
 Remote model transport requires valid HTTPS certificates, rejects redirects, link-local/loopback/metadata destinations and proxy-environment inheritance by default, and records provider retention/logging policy plus explicit operator consent before first transmission.
 
-Response reading is bounded concretely, because §5.6 finiteness depends on it: the client reads at most `model.max_response_bytes`, default **1 MiB**, configurable within 64 KiB to 8 MiB. It streams and counts bytes, aborts as soon as the cap is exceeded, and rejects the response **before** `json.loads`, so an oversized literal is never parsed or materialized. An aborted response is a transport failure subject to the existing retry budget and never retried in a way that multiplies the cap. Requests are bounded by §5.6. Local mode may use loopback HTTP.
+Response reading is bounded concretely, because §5.6 finiteness depends on it. The bound is stated in terms of what is retained rather than what is read, because the two cannot be the same number: without a trusted `Content-Length`, a response of exactly `cap` bytes and one of `cap + 1` are byte-identical over their first `cap` bytes, so detecting the overflow requires reading at least one byte beyond it. "Read no more than the cap" and "detect exceeding the cap" are not simultaneously satisfiable, and an earlier draft asked for both.
+
+The verifiable semantics are:
+
+- `model.max_response_bytes`, default **1 MiB**, configurable within 64 KiB to 8 MiB, bounds the bytes **retained and passed to the parser**;
+- the client may read one bounded overflow probe beyond that — a single chunk, itself capped — solely to determine whether more data exists. Probe bytes are counted, never retained, and never parsed;
+- total bytes read in one attempt are therefore at most `cap + chunk_size`, which is the quantity a test asserts on;
+- the response is rejected **before** `json.loads`, so an oversized literal is never materialized;
+- the cap is **per attempt**. An oversized response is classified **non-retryable**: the same endpoint returning the same oversized body cannot be made acceptable by asking again, and retrying would multiply bytes read by the retry budget. It fails closed to a rule-only assessment;
+- a cumulative per-assessment ceiling of `(retry_budget + 1) x (cap + chunk_size)` bounds all attempts together, so no combination of retryable failures can exceed a computable total.
+
+Requests are bounded by §5.6. Local mode may use loopback HTTP.
 
 ## 8. Failure handling
 

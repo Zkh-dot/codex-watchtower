@@ -238,7 +238,7 @@
 4. Regression-test both failure modes of the relative ordinal this replaces: two identical records where recovery starts after the first must not give the survivor the first record's ID, and a count continued from a stored total must not insert a replayed record twice. Both must hold for replay from the file start and from a checkpoint.
 5. Redact before persistence, bound command output, and retain only redacted summary plus source hash/original byte length.
 6. Ensure unknown events become `kind=unknown` with source type preserved.
-7. Add a negative fixture: a `process_lifecycle` event without `run_id`, `execution_epoch`, or `exit_code` must fail schema validation, since execution scope is what keeps a late exit from terminating a later execution.
+7. Add negative fixtures: a `process_lifecycle` event without `run_id`, `execution_epoch`, or `exit_code`, and one with an empty-string `run_id`, must fail schema validation, since execution scope is what keeps a late exit from terminating a later execution.
 8. Test that turn boundaries normalize to `turn_lifecycle` and process boundaries to `process_lifecycle`, and that no single `lifecycle` kind is emitted.
 9. Commit: `feat: normalize codex rollout events`.
 
@@ -495,11 +495,12 @@
 
 1. Define `assess(model_profile, observation, schema)` interface.
 2. Test OpenAI-compatible structured-output request construction with `respx`, asserting the request carries the wire schema and never the authoritative one.
-3. Test the response transport boundary here, where the client actually reads it: stream and count bytes, read no more than `model.max_response_bytes` (default 1 MiB, configurable 64 KiB to 8 MiB), abort as soon as the cap is exceeded, and reject **before** `json.loads` so an oversized numeric literal is never parsed. Assert an aborted response is a transport failure inside the existing retry budget and does not amplify reads beyond the cap.
-4. Test that a response valid under the wire schema but violating an authoritative bound is rejected and takes the retry path.
-5. Test timeout, invalid JSON, schema mismatch, and retry classification.
-6. Ensure no tools are supplied to the assessment model.
-7. Commit: `feat: add structured model assessment client`.
+3. Test the response transport boundary here, where the client actually reads it. Assert on retained bytes, not on bytes read: at most `model.max_response_bytes` (default 1 MiB, configurable 64 KiB to 8 MiB) reaches the parser, at most one bounded overflow probe is read beyond it, probe bytes are never retained or parsed, and total bytes read in an attempt are at most `cap + chunk_size`. Use responses of exactly `cap` and `cap + 1` bytes with no `Content-Length`, since those are indistinguishable until the probe.
+4. Test that an oversized response is classified non-retryable and fails closed to a rule-only assessment, and that the cumulative ceiling `(retry_budget + 1) x (cap + chunk_size)` bounds all attempts together.
+5. Test that a response valid under the wire schema but violating an authoritative bound is rejected and takes the retry path.
+6. Test timeout, invalid JSON, schema mismatch, and retry classification.
+7. Ensure no tools are supplied to the assessment model.
+8. Commit: `feat: add structured model assessment client`.
 
 ### Task 21: Implement Luna assessment
 
@@ -539,7 +540,7 @@
 4. Test that a reconciled result with `model_assessment: null` is valid and fully populated, which is the rule-only and budget-exhausted path.
 5. Add negative fixtures for every combination the projection forbids, each asserted invalid against the committed schema: `state=idle` with `status=terminal_failed` or `notification_status=identity_broken`; `state=idle` with a non-provisional report; a terminal state with `run_id=null`; and `report_version=1` with a non-null `supersedes`.
 6. Test the domain invariants JSON Schema cannot express: `supersedes < report_version` with a chain that never reuses or decreases a version, and `signal_fingerprint` equal to the canonical digest of `active_signals`, including that a mismatched digest is rejected.
-7. Add negative fixtures for the relations now encoded in the schema: `notification_status` of `stalled`, `looping`, or `off_scope` with no matching signal kind in `active_signals`; an active critical signal with `needs_attention: false`; `fatal` set without `identity_broken`; and `identity_broken` without `fatal`.
+7. Add negative fixtures for the relations now encoded in the schema: `notification_status` of `stalled`, `looping`, or `off_scope` with no matching signal kind in `active_signals`; an active critical signal with `needs_attention: false`; `fatal` set without `identity_broken`; `identity_broken` without `fatal`; an empty-string `run_id` on a terminal result; a `fatal` with no active critical signal; a `prefix_mismatch` without a critical `dependency_unavailable` signal or without a detail naming the file; and each `*_exhausted` reason paired with a counter below its maximum.
 8. Test the fatal path end to end from a saturated `status_epoch`: the session enters `fatal` out of band, epochs freeze, and the message deduplicates on `session_id + "fatal" + reason` with no epoch in the key.
 9. Verify deterministic critical signals force attention despite reassuring model output.
 10. Verify Terra prose supersedes Luna only when valid.

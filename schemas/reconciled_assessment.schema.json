@@ -39,7 +39,8 @@
         "string",
         "null"
       ],
-      "maxLength": 128
+      "maxLength": 128,
+      "minLength": 1
     },
     "execution_epoch": {
       "description": "Ordinal of the bound execution within the session, or null when no execution is bound. It increments only when a new process or launcher binding appears, never on an idle reopen: a quiet period followed by a further turn of the same process is not a new execution and must not be reported as one.",
@@ -505,7 +506,8 @@
       "then": {
         "properties": {
           "run_id": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "execution_epoch": {
             "type": "integer"
@@ -771,6 +773,212 @@
         "properties": {
           "fatal": {
             "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "title": "a fatal condition must carry the critical evidence that justifies it",
+      "if": {
+        "properties": {
+          "fatal": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "fatal"
+        ]
+      },
+      "then": {
+        "properties": {
+          "needs_attention": {
+            "const": true
+          },
+          "active_signals": {
+            "contains": {
+              "properties": {
+                "severity": {
+                  "const": "critical"
+                }
+              },
+              "required": [
+                "severity"
+              ]
+            },
+            "minContains": 1
+          }
+        }
+      }
+    },
+    {
+      "title": "prefix_mismatch names the unreadable source as dependency_unavailable",
+      "if": {
+        "properties": {
+          "fatal": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "const": "prefix_mismatch"
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        "required": [
+          "fatal"
+        ]
+      },
+      "then": {
+        "properties": {
+          "active_signals": {
+            "contains": {
+              "properties": {
+                "kind": {
+                  "const": "dependency_unavailable"
+                },
+                "severity": {
+                  "const": "critical"
+                }
+              },
+              "required": [
+                "kind",
+                "severity"
+              ]
+            },
+            "minContains": 1
+          },
+          "fatal": {
+            "properties": {
+              "detail": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "detail"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "status_epoch_exhausted requires status_epoch actually at its maximum",
+      "if": {
+        "properties": {
+          "fatal": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "const": "status_epoch_exhausted"
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        "required": [
+          "fatal"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status_epoch": {
+            "const": 1000000
+          }
+        }
+      }
+    },
+    {
+      "title": "attention_epoch_exhausted requires attention_epoch actually at its maximum",
+      "if": {
+        "properties": {
+          "fatal": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "const": "attention_epoch_exhausted"
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        "required": [
+          "fatal"
+        ]
+      },
+      "then": {
+        "properties": {
+          "attention_epoch": {
+            "const": 1000000
+          }
+        }
+      }
+    },
+    {
+      "title": "execution_epoch_exhausted requires execution_epoch actually at its maximum",
+      "if": {
+        "properties": {
+          "fatal": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "const": "execution_epoch_exhausted"
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        "required": [
+          "fatal"
+        ]
+      },
+      "then": {
+        "properties": {
+          "execution_epoch": {
+            "const": 100000
+          }
+        }
+      }
+    },
+    {
+      "title": "report_version_exhausted requires a report at its maximum version",
+      "if": {
+        "properties": {
+          "fatal": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "const": "report_version_exhausted"
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        "required": [
+          "fatal"
+        ]
+      },
+      "then": {
+        "properties": {
+          "report": {
+            "type": "object",
+            "properties": {
+              "report_version": {
+                "const": 100000
+              }
+            },
+            "required": [
+              "report_version"
+            ]
           }
         }
       }
