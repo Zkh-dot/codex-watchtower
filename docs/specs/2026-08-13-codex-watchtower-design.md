@@ -29,7 +29,7 @@ Watchtower shall:
 - use Luna for routine assessments and Terra only for escalation;
 - notify on material state changes, anomalies, completion, and failure;
 - provide links or identifiers for opening the detailed session in Codex Trace;
-- produce a final run report after completion.
+- produce a run report when an execution ends, superseded by version if the session is later resumed.
 
 ### 2.2 Quality goals
 
@@ -341,22 +341,31 @@ The reconciler produces the authoritative assessment:
 3. unsupported model evidence references invalidate the response and trigger one retry;
 4. a second invalid response falls back to a rule-generated assessment;
 5. Codex `TurnComplete`/wire `task_complete` changes state to `between_turns`; it never proves terminal session completion;
-6. terminal completion requires zero-exit process evidence from §5.11 plus a configurable quiet grace period with no new turn, or an explicit operator-provided terminal marker;
-7. terminal failure requires non-zero process exit evidence from §5.11 or an explicit deterministic process failure rule;
+6. completion of the **current execution** requires zero-exit process evidence from §5.11 plus a configurable quiet grace period with no new turn, or an explicit operator-provided terminal marker; it does not end the session, which a later execution may resume;
+7. failure of the current execution requires non-zero process exit evidence from §5.11 or an explicit deterministic process failure rule, and is likewise per execution;
 8. for an unobserved session, where no process evidence exists, the quiet grace period alone yields `idle`, which is **not** a terminal state;
-9. an `idle` session that receives any new event returns to `active_turn` and the run continues.
+9. a session in `idle` or an execution-terminal state that receives any new event, or a new execution binding the same session ID, returns to `active_turn` and the run continues.
 
-`idle` exists because a quiet transcript is not evidence of completion. A Codex session can be resumed, and a paused run and a finished run produce identical trailing records, so promoting silence to `terminal_completed_unconfirmed` would close a live session and permanently mislabel it. Only process evidence from §5.11 produces a terminal state; silence produces `idle`, which is reversible by definition.
+`idle` exists because a quiet transcript is not evidence of completion. A Codex session can be resumed, and a paused run and a finished run produce identical trailing records, so promoting silence to a terminal state would close a live session and permanently mislabel it. Only process evidence from §5.11 produces a terminal state; silence produces `idle`, which is reversible by definition.
 
-Reopening is a first-class transition, not an error path:
+#### Executions and session lifetime
 
-- entering `idle` increments `status_epoch` and emits a **provisional** run summary marked `provisional: true` with a monotonic `report_version`;
-- a new event reopens the session to `active_turn`, increments `status_epoch` again, and emits a supersede notice referencing the superseded `report_version`, so an operator who already read the summary learns it was not final;
-- the reopened session keeps its original session ID, cursors, and event sequence; nothing is re-ingested and no event is re-notified;
-- the stale `idle` deduplication entry cannot suppress alerts in the reopened episode, because the epoch has advanced;
-- a session may reopen any number of times, and each `idle` entry produces a new provisional report version.
+**No state closes a persisted Codex session permanently.** `codex exec resume <SESSION_ID> --json` starts a new process that adopts an existing session ID and appends to the same rollout. A wrapped run can therefore exit 0, produce genuine zero-exit process evidence, and be resumed minutes later. Treating that exit as the end of the session would finalize a live one — the same defect as promoting silence to completion, moved onto the process-evidence path.
 
-A final, non-provisional run report is emitted only for `terminal_completed` or `terminal_failed`, both of which require process evidence and neither of which can be reopened.
+The two lifetimes are distinct:
+
+- an **execution** is one Codex process, identified by `run_id` with an `execution_epoch` ordinal within the session. Process evidence terminates an execution;
+- a **session** is the persisted rollout and its ID. It has one or more executions and no defined end.
+
+`terminal_completed` and `terminal_failed` therefore describe **the latest execution**, not the session. They are reportable outcomes, not final ones.
+
+Reopening is a first-class transition on both paths:
+
+- entering `idle` or an execution-terminal state increments `status_epoch` and emits a run summary carrying `run_id`, `execution_epoch`, and a monotonic `report_version`. `provisional: true` marks the `idle` case, where no process evidence exists at all; an execution-terminal report is final **for that execution** and still supersedable;
+- a new event, or a new execution binding the same session ID, returns the session to `active_turn`, increments `status_epoch` and `execution_epoch`, and emits a supersede notice referencing the superseded `report_version`, so an operator who already read a summary learns the run continued;
+- the reopened session keeps its session ID, cursors, and event sequence; nothing is re-ingested and no event is re-notified;
+- a stale deduplication entry cannot suppress alerts in the reopened episode, because `status_epoch` has advanced;
+- a session may reopen any number of times, from either path, each producing a new report version.
 
 #### Session state and assessment status
 
@@ -374,7 +383,7 @@ The projection is fixed, and the reconciler applies it before any model output i
 | `terminal_failed` | `terminal_failed` |
 | `unknown` | `unknown` |
 
-`progressing`, `investigating`, `stalled`, `looping`, and `off_scope` are refinements of `active_turn` only. A model may narrow within the row its session state permits; it may never move the status to a different row. Terminal and waiting states are therefore never model-assigned, and a reassuring assessment cannot promote a session out of `terminal_failed`.
+`progressing`, `investigating`, `stalled`, `looping`, and `off_scope` are refinements of `active_turn` only. A model may narrow within the row its session state permits; it may never move the status to a different row. Terminal and waiting states are therefore never model-assigned, and a reassuring assessment cannot promote a session out of `terminal_failed`. The terminal rows describe the latest execution, and only new deterministic evidence — a new event or a new execution — moves a session out of them.
 
 A third field, `notification_status`, is what §5.10 delivers on. It is computed from deterministic evidence alone and never from model output, so a model narrowing is visible in the API and in message bodies without being able to trigger or suppress a message. The reconciler emits all three: `state` (deterministic lifecycle), `status` (display, may be model-narrowed), and `notification_status` (deterministic, delivery-authoritative).
 
@@ -442,12 +451,12 @@ Rollout JSONL alone cannot distinguish a finished session from a paused one: the
  correlation_method, goal, expected_paths, forbidden_paths, exit_code, exited_at}
 ```
 
-The record is created before spawn with `state=pending`, `pid=null`, and `session_id=null`, because no PID exists until the child is running. It is updated atomically to `state=running` with the real PID once spawn succeeds, and to `state=exited` on exit, including signal termination. A record left in `pending` after a crash is evidence of a failed spawn, not of a session.
+The record is created before spawn with `state=pending`, `pid=null`, and `session_id=null`, because no PID exists until the child is running. `launch_id` is the execution's `run_id`; a launcher binding a session ID that already exists is a resume, and it opens a new execution on that session rather than a new session. It is updated atomically to `state=running` with the real PID once spawn succeeds, and to `state=exited` on exit, including signal termination. A record left in `pending` after a crash is evidence of a failed spawn, not of a session.
 
 Correlation to a rollout file cannot use the PID. Persisted `session_meta` in Codex 0.133.0 contains `id`, `timestamp`, `cwd`, `originator`, `cli_version`, `source`, `model_provider`, `base_instructions`, `git`, and `thread_source` — no PID — and the filesystem watcher cannot tell which process wrote a file. Two protocols are defined instead:
 
 1. **Canonical, from the child's own output.** With `codex exec --json`, Codex emits JSONL on stdout including the session identifier. The launcher tees stdout, forwarding every byte unmodified while parsing a copy, and records the identifier it observes. This is a direct binding between the process the launcher spawned and the session that process reported, and it is the only method that establishes identity rather than inferring it. `correlation_method=stdout_canonical`.
-2. **Snapshot difference, fail-closed.** When the canonical identifier is unavailable, the launcher snapshots the set of rollout files under the sessions root immediately before spawn, then waits for new files to appear. It correlates only when **exactly one** new rollout has `cwd` equal to the launcher's working directory and a first-record timestamp inside `[started_at, started_at + correlation_window]`. Zero candidates, more than one candidate, or window expiry all record `correlation_method=none`, and the run is treated as unobserved. Concurrent Codex runs in one workspace are the expected ambiguous case and are never resolved by guessing. `correlation_method=snapshot_unique`.
+2. **Snapshot difference, fail-closed.** When the canonical identifier is unavailable, the launcher snapshots the rollout files under the sessions root immediately before spawn, recording each file's identity and length, then watches for change. A resume appends to an existing rollout instead of creating a file, so the candidate set is both newly created rollouts and previously known rollouts that grow after `started_at`. It correlates only when **exactly one** candidate has `cwd` equal to the launcher's working directory and its first new record falls inside `[started_at, started_at + correlation_window]`. Zero candidates, more than one candidate, or window expiry all record `correlation_method=none`, and the run is treated as unobserved. Concurrent Codex runs in one workspace are the expected ambiguous case and are never resolved by guessing. `correlation_method=snapshot_unique`.
 
 The launcher never inspects, filters, or alters Codex behavior: teeing stdout forwards bytes unchanged, it writes nothing to the child's stdin, and it observes process lifetime only.
 
@@ -464,6 +473,7 @@ Use SQLite in WAL mode.
 Core tables:
 
 - `sessions`
+- `executions`
 - `process_evidence`
 - `event_cursors`
 - `normalized_events`
@@ -608,7 +618,7 @@ The MVP is accepted when:
 7. Terra runs only under documented escalation conditions.
 8. Deterministic critical signals survive contradictory model output.
 9. Remote-mode packets pass redaction tests with seeded secrets.
-10. A wrapped run reaches `terminal_completed` or `terminal_failed` from process evidence and emits a final run report; an unobserved run reaches `idle` and emits a provisional report; a new event reopens the idle session exactly once per idle entry and supersedes that report. Every report contains status, elapsed time, changed files, tests observed, and session identifier.
+10. A wrapped run reaches `terminal_completed` or `terminal_failed` for its execution from process evidence and emits a run report; an unobserved run reaches `idle` and emits a provisional report; a resumed session reopens from either state, loses no events, and supersedes the earlier report by version. Every report contains status, elapsed time, changed files, tests observed, session identifier, `run_id`, and `execution_epoch`.
 11. The local API and SSE stream survive malformed and unknown Codex events.
 12. For v0.2.0 only: the frozen calibration report is committed and the promotion gates are met, or the system stays in advisory mode.
 

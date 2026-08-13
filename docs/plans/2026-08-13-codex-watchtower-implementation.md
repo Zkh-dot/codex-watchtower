@@ -143,7 +143,7 @@
 
 ### Task 4: Create SQLite migrations and repository interface
 
-**Objective:** Persist sessions, process evidence, cursors, normalized events, signals, assessments, model calls, and deliveries in WAL mode.
+**Objective:** Persist sessions, executions, process evidence, cursors, normalized events, signals, assessments, model calls, and deliveries in WAL mode.
 
 **Files:**
 
@@ -253,10 +253,11 @@
 2. Test terminal completion from zero-exit process evidence (Task 9A) plus quiet grace period, and that no path reaches a terminal state without process evidence.
 3. Test terminal failure from non-zero exit and explicit process evidence.
 4. Test a live file with no process evidence remains active/between-turns/unknown, and that quiet-period expiry without process evidence yields `idle`, which is not terminal.
-5. Test the reopen transition: an `idle` session receiving any new event returns to `active_turn`, keeps its session ID, cursors, and event sequence, re-ingests nothing, and advances `status_epoch`.
-6. Test that repeated idle/reopen cycles each produce a new provisional report version and a supersede notice.
-7. Test that prose such as “done” does not mark completion.
-8. Commit: `feat: derive codex lifecycle from explicit events`.
+5. Test the reopen transition from `idle`: any new event returns the session to `active_turn`, keeps its session ID, cursors, and event sequence, re-ingests nothing, and advances `status_epoch`.
+6. Test reopen from an execution-terminal state: a zero-exit wrapped execution reports `terminal_completed`, then `codex exec resume <same-session-id> --json` opens a new execution, returns the session to `active_turn`, and advances `execution_epoch`. No terminal state may be treated as the end of a persisted session.
+7. Test that repeated reopen cycles from either path each produce a new report version and a supersede notice.
+8. Test that prose such as “done” does not mark completion.
+9. Commit: `feat: derive codex lifecycle from explicit events`.
 
 ### Task 9A: Capture process evidence for terminal states
 
@@ -276,12 +277,13 @@
 2. Test the record lifecycle: created before spawn as `state=pending` with `pid=null`, updated atomically to `state=running` with the real PID after a successful spawn, and to `state=exited` on normal exit, non-zero exit, and signal termination, including when Watchtower itself is not running. A PID cannot exist before spawn, so nothing may require one there.
 3. Test that a failed spawn leaves the record in `pending` and creates no session.
 4. Test canonical correlation: with `codex exec --json`, the launcher tees stdout, forwards every byte unmodified, and binds the session identifier the child itself reported.
-5. Test snapshot correlation: exactly one new rollout with matching `cwd` inside the correlation window correlates; zero candidates, two concurrent runs in one workspace, and window expiry all record `correlation_method=none` and leave the run unobserved.
-6. Assert no test relies on a PID appearing in `session_meta`; Codex 0.133.0 does not emit one and the watcher cannot attribute a file to a process.
-7. Test process adoption: matching workspace and start order, PID disappearance yielding `idle`, and PID reuse rejected by start time.
-8. Test that an unobserved session reaches `idle` from the quiet grace period alone and never a terminal state.
-9. Emit process evidence as a `process_lifecycle` event with `exit_code`; assert the launcher writes nothing to the child's stdin.
-10. Commit: `feat: capture codex process exit evidence`.
+5. Test snapshot correlation over both candidate kinds: a newly created rollout and an existing rollout that grows, since a resume appends rather than creating a file. Exactly one matching candidate correlates; zero candidates, two concurrent runs in one workspace, and window expiry all record `correlation_method=none` and leave the run unobserved.
+6. Test that a launcher binding an existing session ID opens a new execution with the next `execution_epoch` on that session, and never creates a second logical session.
+7. Assert no test relies on a PID appearing in `session_meta`; Codex 0.133.0 does not emit one and the watcher cannot attribute a file to a process.
+8. Test process adoption: matching workspace and start order, PID disappearance yielding `idle`, and PID reuse rejected by start time.
+9. Test that an unobserved session reaches `idle` from the quiet grace period alone and never a terminal state.
+10. Emit process evidence as a `process_lifecycle` event with `exit_code` scoped to its `run_id`; assert the launcher writes nothing to the child's stdin.
+11. Commit: `feat: capture codex process exit evidence`.
 
 ### Task 10: Add filesystem watcher orchestration
 
@@ -773,11 +775,12 @@ Phase 10 gates v0.2.0, not v0.1.0. v0.1.0 ships in advisory mode per specificati
 
 1. Replay timestamped events under a fake clock.
 2. Replay the idle/reopen case end to end: the grace period expires, a provisional report is sent, a new turn is appended, the session reopens exactly once, the supersede notice references the superseded report version, and the stale idle dedup entry suppresses no alert in the reopened episode.
-3. Restart Watchtower midway.
-4. Verify each normalized event and notification appears exactly once.
-5. Verify only incremental windows reach the model client.
-6. Verify provisional and final report contents.
-7. Commit: `test: verify restart-safe autonomous run replay`.
+3. Replay the resume case end to end: a wrapped `codex exec --json` exits 0 and reports `terminal_completed` for that execution, then a wrapped `codex exec resume <same-session-id> --json` appends to the same rollout. Assert no event is lost or duplicated, the session reopens to `active_turn` with the next `execution_epoch`, and the earlier report is superseded by version rather than left standing as final.
+4. Restart Watchtower midway.
+5. Verify each normalized event and notification appears exactly once.
+6. Verify only incremental windows reach the model client.
+7. Verify report contents and version chain across both reopen paths.
+8. Commit: `test: verify restart-safe autonomous run replay`.
 
 ### Task 35: Test degraded dependencies
 

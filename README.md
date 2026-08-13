@@ -37,6 +37,7 @@ The first usable version will:
 - discover active `~/.codex/sessions/**/rollout-*.jsonl` sessions;
 - normalize new Codex events;
 - record process exit evidence for runs started through `watchtower run`, and fall back to a reversible `idle` state otherwise;
+- treat every terminal state as describing one execution, so a session resumed with `codex exec resume` reopens and supersedes its earlier report;
 - query only verified AgentLens Codex fields when a compatible adapter is available;
 - produce a Luna summary every 10 minutes or on significant change;
 - escalate anomalous or conflicting cases to Terra;
