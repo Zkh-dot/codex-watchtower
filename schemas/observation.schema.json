@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ya-yara/codex-watchtower/schemas/observation.schema.json",
+  "title": "WatchtowerObservation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "session", "goal", "window", "events", "signals"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "workspace", "started_at", "elapsed_seconds", "state"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "workspace": { "type": "string" },
+        "started_at": { "type": "string", "format": "date-time" },
+        "elapsed_seconds": { "type": "integer", "minimum": 0 },
+        "state": { "enum": ["running", "waiting", "completed", "failed", "unknown"] },
+        "model": { "type": ["string", "null"] }
+      }
+    },
+    "goal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "expected_paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "forbidden_paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "acceptance_criteria": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from_cursor", "to_cursor", "opened_at", "closed_at"],
+      "properties": {
+        "from_cursor": { "type": ["string", "null"] },
+        "to_cursor": { "type": "string" },
+        "opened_at": { "type": "string", "format": "date-time" },
+        "closed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "previous_assessment": { "$ref": "assessment.schema.json" },
+    "events": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "timestamp", "kind", "summary"],
+        "properties": {
+          "id": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "kind": { "enum": ["message", "reasoning", "command", "command_result", "file_read", "file_changed", "test_result", "error", "lifecycle", "unknown"] },
+          "summary": { "type": "string", "maxLength": 4000 },
+          "path": { "type": ["string", "null"] },
+          "exit_code": { "type": ["integer", "null"] },
+          "source_type": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "signals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["loop_signals", "errors", "changed_files", "unexpected_paths", "progress_markers"],
+      "properties": {
+        "loop_signals": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "errors": { "type": "integer", "minimum": 0 },
+        "changed_files": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "unexpected_paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "progress_markers": { "type": "array", "items": { "type": "string" } },
+        "minutes_without_progress": { "type": "number", "minimum": 0 },
+        "context_growth": { "enum": ["normal", "elevated", "critical", "unknown"] },
+        "test_trend": { "enum": ["improving", "stable", "worsening", "unknown"] }
+      }
+    },
+    "redactions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

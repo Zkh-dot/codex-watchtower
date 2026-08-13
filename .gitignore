@@ -1,0 +1,25 @@
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime state and secrets
+*.db
+*.db-shm
+*.db-wal
+.env
+config.toml
+state/
+logs/
+
+# Local research and transcripts
+*.jsonl
+.cctrace/

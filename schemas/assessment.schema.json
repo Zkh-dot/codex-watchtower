@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ya-yara/codex-watchtower/schemas/assessment.schema.json",
+  "title": "WatchtowerAssessment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "current_action", "goal_alignment", "evidence", "concerns", "needs_attention", "confidence", "assessed_by"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "status": { "enum": ["progressing", "investigating", "waiting", "stalled", "looping", "off_scope", "completed", "failed", "unknown"] },
+    "current_action": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "goal_alignment": { "enum": ["aligned", "possibly_aligned", "misaligned", "unknown"] },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["event_id", "claim"],
+        "properties": {
+          "event_id": { "type": "string" },
+          "claim": { "type": "string", "maxLength": 500 }
+        }
+      }
+    },
+    "concerns": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "kind", "explanation"],
+        "properties": {
+          "severity": { "enum": ["info", "warning", "critical"] },
+          "kind": { "enum": ["loop", "stagnation", "scope", "tests", "errors", "waiting", "resource", "uncertainty", "other"] },
+          "explanation": { "type": "string", "maxLength": 1000 },
+          "event_ids": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+        }
+      }
+    },
+    "needs_attention": { "type": "boolean" },
+    "recommended_human_action": { "type": ["string", "null"], "maxLength": 1000 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "assessed_by": { "enum": ["luna", "terra", "rules"] },
+    "escalation_reason": { "type": ["string", "null"], "maxLength": 500 },
+    "event_cursor": { "type": ["string", "null"] },
+    "assessed_at": { "type": ["string", "null"], "format": "date-time" }
+  }
+}
