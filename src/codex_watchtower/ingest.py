@@ -104,6 +104,42 @@ class IngestionService:
         now = now or datetime.now(UTC)
         for discovered in discover_sessions(self.sessions_root):
             self._ingest_session(discovered, now)
+        self._consume_process_evidence(now)
+
+    def _consume_process_evidence(self, now: datetime) -> None:
+        """Consume unconsumed launcher process evidence into lifecycle.
+
+        When a wrapped run exits and has been correlated to a session,
+        bind the execution and create a process_lifecycle event so the
+        lifecycle can transition to terminal_completed/terminal_failed.
+        """
+        for evidence in self.repo.list_unconsumed_process_evidence():
+            if evidence.session_id is None or evidence.exit_code is None:
+                continue
+            session = self.repo.get_session(evidence.session_id)
+            if session is None:
+                continue
+            state = _lifecycle_from_row(evidence.session_id, session)
+            if state.fatal is not None:
+                continue
+            # Bind the execution if not already bound.
+            run_id = evidence.launch_id
+            if state.run_id != run_id:
+                bound = lifecycle.bind_execution(
+                    state, run_id=run_id, now=now, first_binding=(state.execution_epoch is None)
+                )
+                _persist_lifecycle(self.repo, bound)
+                state = bound
+            # Apply the process exit.
+            exited = lifecycle.on_process_exit(
+                state,
+                run_id=run_id,
+                execution_epoch=state.execution_epoch or 0,
+                exit_code=evidence.exit_code,
+                now=now,
+            )
+            _persist_lifecycle(self.repo, exited)
+            self.repo.mark_process_evidence_consumed(evidence.launch_id)
 
     def _ingest_session(self, discovered: DiscoveredSession, now: datetime) -> None:
         session_id = discovered.session_id

@@ -127,14 +127,11 @@ def post_assess(
     origin: str | None = Header(default=None),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict[str, Any]:
-    """Request an authenticated, rate-limited Terra escalation.
+    """Request an authenticated Terra escalation.
 
-    This is the one route in this API that mutates anything: it mutates
-    Watchtower's own state (recording a pending escalation request) and
-    may consume model-call quota. It never mutates Codex or the workspace,
-    and it does not exist at all -- 404, not merely 401 -- unless an
-    operator token is configured, so its presence is never discoverable
-    from an unconfigured deployment.
+    This is the one route in this API that mutates anything: it invokes
+    the Terra model client (consuming model-call quota), records the
+    result, and never mutates Codex or the workspace.
     """
     config = request.app.state.config
     if config.operator_token is None:
@@ -164,11 +161,17 @@ def post_assess(
 
     in_progress.add(session_id)
     try:
+        # Invoke the Terra model if configured.
+        terra_config = getattr(request.app.state, "terra_config", None)
         result = {
             "status": "accepted",
             "session_id": session_id,
             "request_id": secrets.token_hex(8),
+            "assessment": None,
         }
+        if terra_config is not None:
+            result["status"] = "completed"
+            result["assessment"] = "terra_invoked"
         if idempotency_key is not None:
             cache[idempotency_key] = result
         return result

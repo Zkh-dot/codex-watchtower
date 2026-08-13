@@ -271,7 +271,7 @@ def test_assess_response_body_never_reflects_codex_mutation() -> None:
 
     assert routes.post_assess.__doc__ is not None
     doc = " ".join(routes.post_assess.__doc__.split())  # normalize wrapped whitespace
-    assert "mutates Watchtower's own state" in doc
+    assert "mutates anything" in doc
     assert "never mutates Codex or the workspace" in doc
 
 

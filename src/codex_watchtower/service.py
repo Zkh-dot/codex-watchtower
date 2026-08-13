@@ -11,10 +11,14 @@ import json
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 
 from codex_watchtower.config import ConfigError, WatchtowerConfig, load_config
+
+if TYPE_CHECKING:
+    from codex_watchtower.storage.repository import Repository
 
 DEFAULT_CONFIG_PATHS = (
     Path("config.toml"),
@@ -201,11 +205,13 @@ def run_main(args: argparse.Namespace) -> int:
 
 async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: float) -> None:
     import asyncio
+    import os
 
     import uvicorn
 
     from codex_watchtower.api.app import APIConfig, create_app
     from codex_watchtower.ingest import IngestionService
+    from codex_watchtower.notify.telegram import TelegramNotifier
     from codex_watchtower.storage import db
     from codex_watchtower.storage.repository import Repository
 
@@ -214,17 +220,99 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
     repo = Repository(conn)
     ingestion = IngestionService(config.sessions_root, repo)
 
+    # Build Telegram notifier if configured.
+    telegram_notifier: TelegramNotifier | None = None
+    if config.telegram.enabled:
+        token_env = config.telegram.bot_token_env_var
+        token = os.environ.get(token_env) if token_env else None
+        if token:
+            telegram_notifier = TelegramNotifier(
+                bot_token=token,
+                chat_id_allowlist=config.telegram.chat_id_allowlist,
+            )
+
     api_config = APIConfig(operator_token=config.operator_token)
     app = create_app(repo, api_config)
+    # Expose telegram notifier and model config to the API for /assess.
+    app.state.telegram_notifier = telegram_notifier
+    app.state.luna_config = config.luna
+    app.state.terra_config = config.terra
+    app.state.budget = config.budget
     uv_config = uvicorn.Config(app, host=config.bind.host, port=config.bind.port, log_level="info")
     server = uvicorn.Server(uv_config)
 
     async def ingestion_loop() -> None:
         while True:
             await asyncio.to_thread(ingestion.poll_once)
+            # Dispatch notifications for sessions that need attention.
+            if telegram_notifier is not None:
+                await asyncio.to_thread(
+                    _dispatch_notifications,
+                    repo,
+                    telegram_notifier,
+                    config.telegram.chat_id_allowlist,
+                )
             await asyncio.sleep(poll_interval)
 
     await asyncio.gather(server.serve(), ingestion_loop())
+
+
+def _dispatch_notifications(repo: Repository, notifier: object, chat_ids: list[str]) -> None:
+    """Check reconciled sessions and send notifications via Telegram."""
+    from datetime import UTC, datetime
+
+    from codex_watchtower.notify.policy import (
+        SEND_WORTHY_NOTIFICATION_STATUSES,
+        LastDelivery,
+        deduplication_key,
+        should_send,
+    )
+    from codex_watchtower.notify.telegram import (
+        PendingDelivery,
+        TelegramNotifier,
+        process_delivery,
+    )
+
+    if not chat_ids:
+        return
+    now = datetime.now(UTC)
+    for row in repo.list_sessions():
+        session_id = row["session_id"]
+        reconciled = repo.get_latest_reconciled(session_id)
+        if reconciled is None:
+            continue
+        if reconciled.notification_status not in SEND_WORTHY_NOTIFICATION_STATUSES:
+            continue
+        key = deduplication_key(reconciled)
+        prior = repo.get_delivery(key)
+        last_delivery = (
+            LastDelivery(last_sent_at=prior.last_sent_at)
+            if prior and prior.last_sent_at is not None
+            else None
+        )
+        decision = should_send(reconciled, last_delivery=last_delivery, now=now)
+        if not decision.should_send:
+            continue
+        text = (
+            f"*{reconciled.notification_status.value}*: Session {session_id}\n"
+            f"State: {reconciled.state.value}\n"
+            f"Needs attention: {reconciled.needs_attention}"
+        )
+        for chat_id in chat_ids:
+            pending = PendingDelivery(dedup_key=key, chat_id=chat_id, text=text)
+            outcome = process_delivery(
+                notifier if isinstance(notifier, TelegramNotifier) else None,  # type: ignore[arg-type]
+                pending,
+                now=now,
+            )
+            if outcome.delivered:
+                repo.record_delivery(
+                    key,
+                    session_id,
+                    reconciled.notification_status.value,
+                    cursor=reconciled.event_cursor,
+                    sent_at=now.isoformat(),
+                )
 
 
 def serve_main(args: argparse.Namespace) -> int:

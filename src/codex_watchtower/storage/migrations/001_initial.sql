@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS process_evidence (
     forbidden_paths TEXT NOT NULL DEFAULT '[]',
     exit_code INTEGER,
     exited_at TEXT,
+    consumed INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 

@@ -113,6 +113,7 @@ def assess(
     system_prompt: str,
     *,
     http_client: httpx.Client | None = None,
+    max_request_bytes: int | None = None,
 ) -> AssessResult:
     client = http_client or httpx.Client(
         timeout=profile.timeout_seconds,
@@ -120,6 +121,18 @@ def assess(
         follow_redirects=profile.follow_redirects,
     )
     body = build_request_body(profile, system_prompt, observation)
+
+    # Final fail-closed guard: measure the actual serialized request body,
+    # not just the Observation object. The observation builder's budget
+    # measures the observation dict, but the actual provider request
+    # includes the system prompt, model identifier, wire schema envelope,
+    # and JSON serialization overhead.
+    if max_request_bytes is not None:
+        import json as _json
+
+        request_size = len(_json.dumps(body, separators=(",", ":")).encode("utf-8"))
+        if request_size > max_request_bytes:
+            return AssessResult(assessment=None, attempts=0, failure_reason="request_oversized")
     max_attempts = profile.retry_budget + 1
 
     attempts = 0

@@ -68,6 +68,7 @@ class ProcessEvidenceRecord:
     forbidden_paths: list[str]
     exit_code: int | None
     exited_at: str | None
+    consumed: bool = False
 
 
 class Repository:
@@ -431,12 +432,18 @@ class Repository:
     ) -> None:
         """Persist the latest reconciled result for its session.
 
+        Validates against the authoritative JSON Schema at the persistence
+        boundary so combinations the Pydantic model might accept but the
+        schema forbids (fatal/identity_broken coupling, notification_status
+        matching) cannot enter storage (G1).
+
         ``lifecycle_status_epoch`` is recorded alongside the exposed
         ``status_epoch`` (which can differ from it once rule-narrowing
         increments have been layered on top -- see assess/policy.py's
         module docstring) so the next reconciliation can compute its delta
         against ``lifecycle_state.status_epoch`` correctly.
         """
+        reconciled.validate_against_schema()
         self._conn.execute(
             """
             INSERT INTO reconciled_assessments (
@@ -724,6 +731,32 @@ class Repository:
         )
         return [_row_to_process_evidence(row) for row in rows]
 
+    def list_unconsumed_process_evidence(self) -> list[ProcessEvidenceRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM process_evidence WHERE state = 'exited' AND session_id IS NOT NULL "
+            "AND consumed = 0 ORDER BY created_at ASC"
+        ).fetchall()
+        return [_row_to_process_evidence(row) for row in rows]
+
+    def mark_process_evidence_consumed(self, launch_id: str) -> None:
+        self._conn.execute(
+            "UPDATE process_evidence SET consumed = 1 WHERE launch_id = ?", (launch_id,)
+        )
+
+    def count_model_calls_for_session(self, session_id: str) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) as cnt FROM model_calls WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        return row["cnt"] if row else 0
+
+    def sum_daily_cost_cents(self, day: str) -> int:
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(estimated_cost_cents), 0) as total FROM model_calls "
+            "WHERE started_at LIKE ?",
+            (f"{day}%",),
+        ).fetchone()
+        return row["total"] if row else 0
+
 
 def row_to_domain_event(row: sqlite3.Row) -> domain.Event:
     return domain.Event(
@@ -754,4 +787,5 @@ def _row_to_process_evidence(row: sqlite3.Row) -> ProcessEvidenceRecord:
         forbidden_paths=json.loads(row["forbidden_paths"]),
         exit_code=row["exit_code"],
         exited_at=row["exited_at"],
+        consumed=bool(row["consumed"]) if "consumed" in row.keys() else False,
     )

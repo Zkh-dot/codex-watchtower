@@ -56,15 +56,20 @@ class TelegramNotifier:
     api_base: str = DEFAULT_API_BASE
 
     def _client(self) -> httpx.Client:
-        return self.http_client or httpx.Client(timeout=10.0)
+        if self.http_client is not None:
+            return self.http_client
+        client = httpx.Client(timeout=10.0)
+        return client
 
     def send(self, chat_id: str, text: str) -> SendResult:
         if chat_id not in self.chat_id_allowlist:
             raise ValueError(f"chat_id {chat_id!r} is not in the configured allowlist")
 
         url = f"{self.api_base}/bot{self.bot_token}/sendMessage"
+        client = self._client()
+        owns_client = self.http_client is None
         try:
-            response = self._client().post(
+            response = client.post(
                 url, json={"chat_id": chat_id, "text": text, "parse_mode": "MarkdownV2"}
             )
         except httpx.HTTPError as exc:
@@ -74,6 +79,9 @@ class TelegramNotifier:
                 retry_after_seconds=None,
                 error=f"network error: {exc}",
             )
+        finally:
+            if owns_client:
+                client.close()
 
         if response.status_code == 200:
             try:

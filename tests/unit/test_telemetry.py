@@ -43,6 +43,17 @@ def test_counters_as_dict_sanitizes_label_values_into_keys() -> None:
     assert "future_event" in rendered  # type identifiers are bounded, not transcript text
 
 
+def test_counters_hash_high_cardinality_label_values() -> None:
+    """Long session IDs (UUIDs) must be hashed, not embedded raw in metric names."""
+    c = Counters()
+    long_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"  # 36 chars — UUID-like
+    c.inc("events_ingested", {"session_id": long_id})
+    d = c.as_dict()
+    rendered = json.dumps(d)
+    assert long_id not in rendered  # raw UUID must not appear in metric names
+    assert "events_ingested_" in rendered  # metric name prefix survives
+
+
 def test_counters_reset() -> None:
     c = Counters()
     c.inc("events_ingested", {"session_id": "s1"})

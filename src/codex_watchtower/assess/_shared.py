@@ -5,11 +5,15 @@ schema-shape failure. Resolving evidence references against the actual
 observation packet is a semantic check the generic client cannot perform,
 so it gets its own one-retry-then-rule-only-fallback layer here, shared by
 both assessors rather than duplicated.
+
+The evidence-validation retry is bounded: the second call uses
+``retry_budget=0`` so the total provider attempts never exceed
+``(retry_budget + 1) + 1``, not ``2 * (retry_budget + 1)``.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import httpx
 
@@ -37,7 +41,10 @@ def assess_with_evidence_validation(
     if not domain.validate_evidence_against_packet(first.assessment, observation):
         return EvidenceValidatedResult(first.assessment, None)
 
-    second = assess(profile, observation, system_prompt, http_client=http_client)
+    # Second attempt with retry_budget=0 to bound total provider attempts
+    # to (retry_budget + 1) + 1, not 2 * (retry_budget + 1).
+    second_profile = replace(profile, retry_budget=0)
+    second = assess(second_profile, observation, system_prompt, http_client=http_client)
     if second.assessment is None:
         return EvidenceValidatedResult(None, second.failure_reason)
     if domain.validate_evidence_against_packet(second.assessment, observation):

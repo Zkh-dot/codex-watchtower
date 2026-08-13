@@ -78,6 +78,23 @@ should remain owner-only readable, matching what `systemd`'s
 `ReadWritePaths=/var/lib/codex-watchtower` plus standard directory
 permissions already enforce.
 
+## systemd user permissions
+
+The `watchtower` systemd unit runs as a dedicated `watchtower` user, but
+Codex session files typically live under a human user's home directory
+(`~/.codex/sessions/`) with `0700` permissions. The `watchtower` user
+cannot read them by default. Resolve this by one of:
+
+1. **Group access**: Add the `watchtower` user to the human user's group
+   and grant group read/execute on the session directory:
+   `chmod 750 ~/.codex/sessions && find ~/.codex/sessions -type d -exec chmod g+rx {} \;`
+2. **ACLs**: `setfacl -R -m u:watchtower:rX ~/.codex/sessions`
+3. **Shared state directory**: Configure Codex to write sessions to a
+   shared location the `watchtower` user can read.
+
+Option 2 (ACLs) is preferred: it grants access without changing the
+default permissions for other users on the system.
+
 ## Redacted secret scanning
 
 Before deploying or sharing generated observation packets, logs, or the

@@ -30,9 +30,20 @@ from typing import Any
 from codex_watchtower.privacy.redact import redact_text
 
 _METRIC_NAME_REPLACEMENT = "_"
+_MAX_LABEL_VALUE_LENGTH = 32  # hash values longer than this to bound cardinality
 
 
 def _safe_metric_suffix(value: str) -> str:
+    """Bounded metric name component: alphanumeric-only, length-capped.
+
+    High-cardinality values (session IDs, wire types, error reasons) are
+    truncated to a short prefix and hashed to prevent unbounded cardinality
+    and raw content leakage through metric names (spec §9, G2).
+    """
+    import hashlib as _hl
+
+    if len(value) > _MAX_LABEL_VALUE_LENGTH:
+        value = _hl.sha256(value.encode()).hexdigest()[:_MAX_LABEL_VALUE_LENGTH]
     return "".join(c if c.isalnum() else _METRIC_NAME_REPLACEMENT for c in value).strip(
         _METRIC_NAME_REPLACEMENT
     )
