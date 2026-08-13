@@ -277,7 +277,14 @@ Two separate guarantees are involved, and conflating them produced an unsatisfia
 
 `signal.payload` is a bounded scalar map rather than a free-form object; nested structure is rendered into the summary instead. Floating-point values are excluded from payloads entirely, because JSON gives a float no serialization-length bound: a ratio must be rendered as a bounded string or a bounded integer.
 
-`confidence` is the single float in either contract. It is bounded by the **canonical serialization rule**: the builder emits JSON from validated domain objects and never passes provider text through, so a float is re-serialized from a parsed double and occupies at most 24 characters regardless of how many digits arrived.
+There are no floats in either contract. `confidence_percent` is an integer 0-100, replacing a former `0 <= confidence <= 1` float. Numeric range does not bound token length — `{"confidence": 0.0000000000000000000000000000000001}` satisfies that range and an arbitrarily long literal still validates — so a float could not participate in a finite schema bound at all. A canonical serialization rule bounds re-serialization but says nothing about the bytes that arrive, so it cannot carry this claim on its own.
+
+Two independent limits therefore apply, and both are required:
+
+1. **Transport limit, before parsing.** §7.3 caps the raw provider response in bytes. The reader stops at the cap and rejects the response without parsing it, so an oversized numeric literal is never materialized. This is the only limit that applies to bytes Watchtower did not produce.
+2. **Schema limit, after parsing.** Every field, `confidence_percent` included, has a bounded serialized form, so the finiteness claim above holds over parsed and re-serialized values.
+
+The builder additionally emits JSON only from validated domain objects and never passes provider text through verbatim.
 
 `used_characters` is measured on the final serialized request, not on the packet in isolation, and `used_characters <= budget_characters` is a domain invariant enforced in §5.3 validation, since JSON Schema cannot express a cross-field comparison.
 
@@ -371,10 +378,12 @@ The two lifetimes are distinct:
 Reopening is a first-class transition on both paths:
 
 - entering `idle` or an execution-terminal state increments `status_epoch` and emits a run summary carrying `run_id`, `execution_epoch`, and a monotonic `report_version`. `provisional: true` marks the `idle` case, where no process evidence exists at all; an execution-terminal report is final **for that execution** and still supersedable;
-- a new event, or a new execution binding the same session ID, returns the session to `active_turn`, increments `status_epoch` and `execution_epoch`, and emits a supersede notice referencing the superseded `report_version`, so an operator who already read a summary learns the run continued;
+- a new event returns the session to `active_turn` and increments `status_epoch` only. A quiet period followed by a further turn of the same process is not a new execution, so inventing an `execution_epoch` for it would report an execution that never existed;
+- a new execution binding the same session ID also increments `execution_epoch` and sets a new `run_id`. Where no execution is bound at all, as for an unobserved session, `run_id` and `execution_epoch` are both null rather than a fictitious zero;
+- either path emits a supersede notice referencing the superseded `report_version`, so an operator who already read a summary learns the run continued;
 - the reopened session keeps its session ID, cursors, and event sequence; nothing is re-ingested and no event is re-notified;
 - a stale deduplication entry cannot suppress alerts in the reopened episode, because `status_epoch` has advanced;
-- a session may reopen any number of times, from either path, each producing a new report version.
+- a session may reopen repeatedly from either path, each reopen producing a new report version, up to the committed maxima: 100,000 executions and report versions, 1,000,000 status and attention epochs. These are not decorative. A counter that saturates cannot represent the next state, so at the cap Watchtower stops incrementing, marks the session `identity_broken` with a critical signal naming the exhausted counter, and requires a new session rather than silently reusing an epoch and colliding deduplication keys. The bounds exist because §5.6 requires every field to be finite; the previous "any number of times" was not expressible under them.
 
 #### Session state and assessment status
 
@@ -430,7 +439,7 @@ Delivery policy:
 Send when:
 
 - a deterministic signal raises `needs_attention` from false to true;
-- `notification_status` enters `waiting`, `stalled`, `looping`, `off_scope`, `terminal_failed`, `terminal_completed`, or `idle`;
+- `notification_status` enters `waiting`, `stalled`, `looping`, `off_scope`, `terminal_failed`, `terminal_completed`, `idle`, or `identity_broken`;
 - a warning persists and materially changes;
 - a configured periodic digest is due, default disabled.
 
@@ -445,6 +454,8 @@ session_id + status_epoch + attention_epoch + notification_status + signal_finge
 The key excludes the event cursor. The cursor advances on every ingested event, so including it would make the key unique per assessment and suppress no duplicate at all; it would also re-notify after a restart replayed the same window under a new cursor.
 
 `status_epoch` is a per-session counter incremented every time `notification_status` changes to a different value. Without it the key persists across transitions, so a `waiting → active_turn → waiting` cycle would reuse the key of the first `waiting` and be suppressed, contradicting the rule that entering `waiting` sends. The epoch makes each entry into a state a distinct episode while still collapsing repeats within one episode.
+
+`identity_broken` is in the send list because attention transitions cannot be relied on to surface it. Ingestion has stopped for that session, which is precisely when an operator must be told, yet if attention was already true from an unrelated active signal there is no `false → true` transition to trigger delivery and the session would go silent unnoticed. Entering the state sends on its own.
 
 `attention_epoch` is a second counter, incremented on every deterministic `needs_attention` transition from false to true. `status_epoch` alone does not cover signal reactivation: a signal can activate, clear, and activate again while `notification_status` stays `progressing` throughout, in which case epoch, status, and fingerprint all match the first episode and a genuine new `false → true` transition is suppressed — a warning silently, a critical until its cooldown. Since the delivery policy sends on every such transition, the key must change on every such transition. The two epochs are independent: state changes advance one, attention changes advance the other, and either alone opens a new episode.
 

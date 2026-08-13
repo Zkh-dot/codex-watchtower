@@ -2,35 +2,97 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ya-yara/codex-watchtower/schemas/reconciled_assessment.schema.json",
   "title": "WatchtowerReconciledAssessment",
-  "description": "Authoritative output of the policy reconciler (specification 5.8) and the payload of the status API and notifier. Separates the three status fields the design requires: deterministic lifecycle state, display status which a model may narrow, and notification_status which is deterministic-only and is the sole field the notifier reads. assessment.schema.json remains the model-produced contract and is embedded here unchanged, so the advisory-mode boundary is expressible and testable rather than conventional. Every field is capped so a serialized instance is finite.",
+  "description": "Authoritative output of the policy reconciler (specification 5.8) and the payload of the status API and notifier. Separates the three status fields the design requires: deterministic lifecycle state, display status which a model may narrow, and notification_status which is deterministic-only and is the sole field the notifier reads. assessment.schema.json remains the model-produced contract and is embedded here unchanged, so the advisory-mode boundary is expressible and testable rather than conventional. The allOf block encodes the reconciliation projection itself, not merely field shapes: which statuses each lifecycle state permits, which part of notification_status is lifecycle-derived, that a terminal state carries the execution that produced it, and that report provisionality follows from state. supersedes < report_version is a domain invariant, since JSON Schema cannot compare two sibling values. Every field is capped so a serialized instance is finite.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "session_id", "run_id", "execution_epoch", "state", "status", "notification_status", "status_epoch", "attention_epoch", "needs_attention", "active_signals", "signal_fingerprint", "model_assessment", "report", "event_cursor", "reconciled_at"],
+  "required": [
+    "schema_version",
+    "session_id",
+    "run_id",
+    "execution_epoch",
+    "state",
+    "status",
+    "notification_status",
+    "status_epoch",
+    "attention_epoch",
+    "needs_attention",
+    "active_signals",
+    "signal_fingerprint",
+    "model_assessment",
+    "report",
+    "event_cursor",
+    "reconciled_at"
+  ],
   "properties": {
-    "schema_version": { "const": "1.0" },
-    "session_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
     "run_id": {
       "description": "Identifier of the execution this result describes, or null when no execution is bound.",
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "maxLength": 128
     },
     "execution_epoch": {
-      "description": "Zero-based ordinal of the execution within the session. Increments when a resume binds the same session ID.",
-      "type": "integer",
+      "description": "Ordinal of the bound execution within the session, or null when no execution is bound. It increments only when a new process or launcher binding appears, never on an idle reopen: a quiet period followed by a further turn of the same process is not a new execution and must not be reported as one.",
+      "type": [
+        "integer",
+        "null"
+      ],
       "minimum": 0,
       "maximum": 100000
     },
     "state": {
       "description": "Deterministic lifecycle, owned by session discovery and process evidence. Never model-assigned.",
-      "enum": ["active_turn", "between_turns", "waiting", "terminal_completed", "terminal_failed", "idle", "identity_broken", "unknown"]
+      "enum": [
+        "active_turn",
+        "between_turns",
+        "waiting",
+        "terminal_completed",
+        "terminal_failed",
+        "idle",
+        "identity_broken",
+        "unknown"
+      ]
     },
     "status": {
       "description": "Display status. A model may narrow this within the row its state permits; it may never move it to another row.",
-      "enum": ["progressing", "investigating", "between_turns", "waiting", "stalled", "looping", "off_scope", "terminal_completed", "terminal_failed", "idle", "unknown"]
+      "enum": [
+        "progressing",
+        "investigating",
+        "between_turns",
+        "waiting",
+        "stalled",
+        "looping",
+        "off_scope",
+        "terminal_completed",
+        "terminal_failed",
+        "idle",
+        "unknown"
+      ]
     },
     "notification_status": {
       "description": "Delivery-authoritative status, derived only from deterministic lifecycle and rule signals. The notifier reads this and nothing else. In advisory mode no model output can reach it.",
-      "enum": ["progressing", "between_turns", "waiting", "stalled", "looping", "off_scope", "terminal_completed", "terminal_failed", "idle", "identity_broken", "unknown"]
+      "enum": [
+        "progressing",
+        "between_turns",
+        "waiting",
+        "stalled",
+        "looping",
+        "off_scope",
+        "terminal_completed",
+        "terminal_failed",
+        "idle",
+        "identity_broken",
+        "unknown"
+      ]
     },
     "status_epoch": {
       "description": "Increments whenever notification_status changes to a different value, making each entry into a state a distinct episode.",
@@ -56,11 +118,41 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "kind", "severity"],
+        "required": [
+          "id",
+          "kind",
+          "severity"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1, "maxLength": 128 },
-          "kind": { "enum": ["repeated_command", "recurring_error", "stagnation", "scope_expansion", "forbidden_path", "waiting", "turn_failed", "process_failed", "test_regression", "context_growth", "agentlens_finding", "dependency_unavailable", "other"] },
-          "severity": { "enum": ["info", "warning", "critical"] }
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "enum": [
+              "repeated_command",
+              "recurring_error",
+              "stagnation",
+              "scope_expansion",
+              "forbidden_path",
+              "waiting",
+              "turn_failed",
+              "process_failed",
+              "test_regression",
+              "context_growth",
+              "agentlens_finding",
+              "dependency_unavailable",
+              "other"
+            ]
+          },
+          "severity": {
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ]
+          }
         }
       }
     },
@@ -73,30 +165,404 @@
     "model_assessment": {
       "description": "The model result, unchanged, or null when none was produced or it was rejected. Advisory in v0.1.0: present here for display and context, never consulted for delivery.",
       "oneOf": [
-        { "type": "null" },
-        { "$ref": "assessment.schema.json" }
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "assessment.schema.json"
+        }
       ]
     },
     "report": {
       "description": "Run report state, or null when no report is due.",
       "oneOf": [
-        { "type": "null" },
+        {
+          "type": "null"
+        },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["report_version", "provisional", "supersedes"],
+          "required": [
+            "report_version",
+            "provisional",
+            "supersedes"
+          ],
           "properties": {
-            "report_version": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "report_version": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
             "provisional": {
               "description": "True for an idle report, where no process evidence exists. An execution-terminal report is final for its execution and still supersedable by a resume.",
               "type": "boolean"
             },
-            "supersedes": { "type": ["integer", "null"], "minimum": 1, "maximum": 100000 }
+            "supersedes": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 100000
+            }
           }
         }
       ]
     },
-    "event_cursor": { "type": ["integer", "null"], "minimum": 0, "maximum": 1000000000 },
-    "reconciled_at": { "type": "string", "format": "date-time", "maxLength": 40 }
-  }
+    "event_cursor": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1000000000
+    },
+    "reconciled_at": {
+      "type": "string",
+      "format": "date-time",
+      "maxLength": 40
+    }
+  },
+  "allOf": [
+    {
+      "title": "projection: state active_turn",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "active_turn"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "enum": [
+              "progressing",
+              "investigating",
+              "stalled",
+              "looping",
+              "off_scope"
+            ]
+          },
+          "notification_status": {
+            "enum": [
+              "progressing",
+              "stalled",
+              "looping",
+              "off_scope"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "projection: state between_turns",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "between_turns"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "enum": [
+              "between_turns"
+            ]
+          },
+          "notification_status": {
+            "enum": [
+              "between_turns"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "projection: state waiting",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "waiting"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "enum": [
+              "waiting"
+            ]
+          },
+          "notification_status": {
+            "enum": [
+              "waiting"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "projection: state terminal_completed",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "terminal_completed"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "enum": [
+              "terminal_completed"
+            ]
+          },
+          "notification_status": {
+            "enum": [
+              "terminal_completed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "projection: state terminal_failed",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "terminal_failed"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "enum": [
+              "terminal_failed"
+            ]
+          },
+          "notification_status": {
+            "enum": [
+              "terminal_failed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "projection: state idle",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "idle"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "enum": [
+              "idle"
+            ]
+          },
+          "notification_status": {
+            "enum": [
+              "idle"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "projection: state identity_broken",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "identity_broken"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "enum": [
+              "unknown"
+            ]
+          },
+          "notification_status": {
+            "enum": [
+              "identity_broken"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "projection: state unknown",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "unknown"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "enum": [
+              "unknown"
+            ]
+          },
+          "notification_status": {
+            "enum": [
+              "unknown"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "a terminal state requires the execution whose evidence produced it",
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "terminal_completed",
+              "terminal_failed"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "execution_epoch": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "title": "an idle report is provisional; no process evidence exists",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "idle"
+          },
+          "report": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "state",
+          "report"
+        ]
+      },
+      "then": {
+        "properties": {
+          "report": {
+            "properties": {
+              "provisional": {
+                "const": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "title": "an execution-terminal report is not provisional",
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "terminal_completed",
+              "terminal_failed"
+            ]
+          },
+          "report": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "state",
+          "report"
+        ]
+      },
+      "then": {
+        "properties": {
+          "report": {
+            "properties": {
+              "provisional": {
+                "const": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "title": "the first report supersedes nothing",
+      "if": {
+        "properties": {
+          "report": {
+            "type": "object",
+            "properties": {
+              "report_version": {
+                "const": 1
+              }
+            },
+            "required": [
+              "report_version"
+            ]
+          }
+        },
+        "required": [
+          "report"
+        ]
+      },
+      "then": {
+        "properties": {
+          "report": {
+            "properties": {
+              "supersedes": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

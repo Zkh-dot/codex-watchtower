@@ -14,7 +14,7 @@
     "concerns",
     "needs_attention",
     "recommended_human_action",
-    "confidence",
+    "confidence_percent",
     "assessed_by",
     "escalation_reason",
     "event_cursor",
@@ -135,11 +135,11 @@
       ],
       "maxLength": 1000
     },
-    "confidence": {
-      "type": "number",
+    "confidence_percent": {
+      "description": "Confidence as an integer percentage. A fixed-point integer replaces the former 0..1 float because a JSON number has no token-length bound: 0 <= confidence <= 1 admits an arbitrarily long literal, so the float could not be part of a finite schema bound.",
+      "type": "integer",
       "minimum": 0,
-      "maximum": 1,
-      "description": "Serialized canonically from a validated double, so its serialized form is bounded at 24 characters; see the canonical serialization rule in the specification."
+      "maximum": 100
     },
     "assessed_by": {
       "enum": [

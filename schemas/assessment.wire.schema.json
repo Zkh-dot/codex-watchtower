@@ -5,21 +5,68 @@
   "description": "Provider-facing projection of assessment.schema.json for strict structured output. Conservative lowest-common-denominator: every object sets additionalProperties false and lists all properties in required, and keywords commonly unsupported by strict modes (const, format, minLength, maxLength, minimum, maximum, minItems, maxItems, uniqueItems, oneOf, external $ref) are omitted. Per-deployment support is not yet established; Task 0C records the capability matrix and the projection may be relaxed per deployment afterwards. Constraints removed here are not relaxed in effect: assessment.schema.json remains authoritative and every response is validated against it after parsing. Both files must be regenerated together; CI asserts they stay structurally aligned.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "status", "current_action", "goal_alignment", "evidence", "basis_ids", "concerns", "needs_attention", "recommended_human_action", "confidence", "assessed_by", "escalation_reason", "event_cursor", "assessed_at"],
+  "required": [
+    "schema_version",
+    "status",
+    "current_action",
+    "goal_alignment",
+    "evidence",
+    "basis_ids",
+    "concerns",
+    "needs_attention",
+    "recommended_human_action",
+    "confidence_percent",
+    "assessed_by",
+    "escalation_reason",
+    "event_cursor",
+    "assessed_at"
+  ],
   "properties": {
-    "schema_version": { "enum": ["1.0"] },
-    "status": { "enum": ["progressing", "investigating", "between_turns", "waiting", "stalled", "looping", "off_scope", "terminal_completed", "terminal_failed", "idle", "unknown"] },
-    "current_action": { "type": "string", "description": "One sentence, at most 500 characters." },
-    "goal_alignment": { "enum": ["aligned", "possibly_aligned", "misaligned", "unknown"] },
+    "schema_version": {
+      "enum": [
+        "1.0"
+      ]
+    },
+    "status": {
+      "enum": [
+        "progressing",
+        "investigating",
+        "between_turns",
+        "waiting",
+        "stalled",
+        "looping",
+        "off_scope",
+        "terminal_completed",
+        "terminal_failed",
+        "idle",
+        "unknown"
+      ]
+    },
+    "current_action": {
+      "type": "string",
+      "description": "One sentence, at most 500 characters."
+    },
+    "goal_alignment": {
+      "enum": [
+        "aligned",
+        "possibly_aligned",
+        "misaligned",
+        "unknown"
+      ]
+    },
     "evidence": {
       "type": "array",
       "description": "Between 1 and 12 items. Every ref_id must appear in the observation packet.",
-      "items": { "$ref": "#/$defs/evidence" }
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
     },
     "basis_ids": {
       "type": "array",
       "description": "At least one ref_id from evidence[], supporting status, current_action, and goal_alignment.",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "concerns": {
       "type": "array",
@@ -27,32 +74,112 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["severity", "kind", "explanation", "evidence_refs"],
+        "required": [
+          "severity",
+          "kind",
+          "explanation",
+          "evidence_refs"
+        ],
         "properties": {
-          "severity": { "enum": ["info", "warning", "critical"] },
-          "kind": { "enum": ["loop", "stagnation", "scope", "tests", "errors", "waiting", "resource", "uncertainty", "infrastructure", "other"] },
-          "explanation": { "type": "string", "description": "At most 1000 characters." },
-          "evidence_refs": { "type": "array", "description": "At least one ref_id from evidence[].", "items": { "type": "string" } }
+          "severity": {
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "loop",
+              "stagnation",
+              "scope",
+              "tests",
+              "errors",
+              "waiting",
+              "resource",
+              "uncertainty",
+              "infrastructure",
+              "other"
+            ]
+          },
+          "explanation": {
+            "type": "string",
+            "description": "At most 1000 characters."
+          },
+          "evidence_refs": {
+            "type": "array",
+            "description": "At least one ref_id from evidence[].",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
-    "needs_attention": { "type": "boolean" },
-    "recommended_human_action": { "type": ["string", "null"], "description": "At most 1000 characters, or null." },
-    "confidence": { "type": "number", "description": "Between 0 and 1 inclusive." },
-    "assessed_by": { "enum": ["luna", "terra", "rules"] },
-    "escalation_reason": { "type": ["string", "null"], "description": "At most 500 characters, or null." },
-    "event_cursor": { "description": "Per-session event sequence value, or null.", "type": ["integer", "null"] },
-    "assessed_at": { "type": "string", "description": "RFC 3339 timestamp." }
+    "needs_attention": {
+      "type": "boolean"
+    },
+    "recommended_human_action": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "At most 1000 characters, or null."
+    },
+    "confidence_percent": {
+      "type": "integer",
+      "description": "Integer 0-100. Confidence as a percentage; not a fraction."
+    },
+    "assessed_by": {
+      "enum": [
+        "luna",
+        "terra",
+        "rules"
+      ]
+    },
+    "escalation_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "At most 500 characters, or null."
+    },
+    "event_cursor": {
+      "description": "Per-session event sequence value, or null.",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "assessed_at": {
+      "type": "string",
+      "description": "RFC 3339 timestamp."
+    }
   },
   "$defs": {
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["ref_type", "ref_id", "claim"],
+      "required": [
+        "ref_type",
+        "ref_id",
+        "claim"
+      ],
       "properties": {
-        "ref_type": { "enum": ["event", "signal", "system"] },
-        "ref_id": { "type": "string" },
-        "claim": { "type": "string", "description": "At most 500 characters." }
+        "ref_type": {
+          "enum": [
+            "event",
+            "signal",
+            "system"
+          ]
+        },
+        "ref_id": {
+          "type": "string"
+        },
+        "claim": {
+          "type": "string",
+          "description": "At most 500 characters."
+        }
       }
     }
   }

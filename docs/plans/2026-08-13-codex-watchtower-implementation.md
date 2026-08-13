@@ -135,7 +135,7 @@
 
 **Steps:**
 
-1. Write tests for enum values, assessment confidence bounds, unique evidence references, and schema serialization.
+1. Write tests for enum values, `confidence_percent` integer bounds, unique evidence references, and schema serialization.
 2. Implement Pydantic models matching the committed JSON Schemas.
 3. Enforce RFC 3339 timestamps, `opened_at <= closed_at`, cursor consistency, unique/monotonic event IDs and timestamps, events inside the window, `used_characters <= budget_characters`, and assessment references resolving to packet event, signal, or `system_refs` IDs.
 4. Test the session-state to assessment-status projection: each state permits only its documented statuses, and a model narrowing within `active_turn` is accepted while a cross-row move is rejected.
@@ -254,13 +254,14 @@
 
 1. Test multiple turn start/complete sequences remain `between_turns`, not terminally completed.
 2. Test terminal completion from zero-exit process evidence (Task 9A) plus quiet grace period, and that no path reaches a terminal state without process evidence.
-3. Test terminal failure from non-zero exit and explicit process evidence.
+3. Test terminal failure from non-zero exit and explicit process evidence, and that a terminal transition is accepted only from a `process_lifecycle` event whose `run_id` is the session's current execution. A late exit event from execution 1 must not terminate a resumed execution 2.
 4. Test a live file with no process evidence remains active/between-turns/unknown, and that quiet-period expiry without process evidence yields `idle`, which is not terminal.
-5. Test the reopen transition from `idle`: any new event returns the session to `active_turn`, keeps its session ID, cursors, and event sequence, re-ingests nothing, and advances `status_epoch`.
+5. Test the reopen transition from `idle`: any new event returns the session to `active_turn`, keeps its session ID, cursors, and event sequence, re-ingests nothing, and advances `status_epoch` **only**. `execution_epoch` and `run_id` must not move: the same process resuming work after a quiet period is not a new execution. An unobserved session keeps both null rather than reporting a fictitious execution 0.
 6. Test reopen from an execution-terminal state: a zero-exit wrapped execution reports `terminal_completed`, then `codex exec resume <same-session-id> --json` opens a new execution, returns the session to `active_turn`, and advances `execution_epoch`. No terminal state may be treated as the end of a persisted session.
 7. Test that repeated reopen cycles from either path each produce a new report version and a supersede notice.
-8. Test that prose such as “done” does not mark completion.
-9. Commit: `feat: derive codex lifecycle from explicit events`.
+8. Test counter exhaustion: at the committed maximum for `execution_epoch`, `report_version`, `status_epoch`, or `attention_epoch`, the session is marked `identity_broken` with a critical signal naming the exhausted counter, and no epoch is reused or decreased.
+9. Test that prose such as “done” does not mark completion.
+10. Commit: `feat: derive codex lifecycle from explicit events`.
 
 ### Task 9A: Capture process evidence for terminal states
 
@@ -285,7 +286,7 @@
 7. Assert no test relies on a PID appearing in `session_meta`; Codex 0.133.0 does not emit one and the watcher cannot attribute a file to a process.
 8. Test process adoption: matching workspace and start order, PID disappearance yielding `idle`, and PID reuse rejected by start time.
 9. Test that an unobserved session reaches `idle` from the quiet grace period alone and never a terminal state.
-10. Emit process evidence as a `process_lifecycle` event with `exit_code` scoped to its `run_id`; assert the launcher writes nothing to the child's stdin.
+10. Emit process evidence as a `process_lifecycle` event carrying `exit_code`, `run_id`, and `execution_epoch`, which the event contract now includes; assert the launcher writes nothing to the child's stdin.
 11. Commit: `feat: capture codex process exit evidence`.
 
 ### Task 10: Add filesystem watcher orchestration
@@ -469,7 +470,7 @@
 4. Prove finiteness structurally: walk both schemas and assert every string has `maxLength`, every array `maxItems`, every numeric `maximum`, and every object with `additionalProperties` a `maxProperties`. This test fails when a future field is added without a cap, which is how the previous gap appeared.
 5. Compute the theoretical worst-case serialized request from the schema caps and assert it is finite. Do not assert it fits the budget: 200 events at 4,000 characters already exceed 48,000, so that assertion is unsatisfiable by construction.
 6. Prove the runtime bound instead: build a request from maximal inputs (goal at `maxLength`, a previous assessment at its own maxima, 200 maximal events, 64 maximal signals with payloads at `maxProperties`) and assert the builder either emits `serialized_size <= 48_000` after eviction or fails closed to a rule-only assessment with no model call. Assert on the bytes handed to the transport, including prompt scaffolding.
-7. Test the canonical serialization rule: a confidence value arriving with excessive precision is re-serialized from a parsed double at 24 characters or fewer, and no provider text is passed through verbatim.
+7. Test both numeric limits independently: a raw provider response exceeding the §7.3 byte cap is rejected before parsing, so an oversized numeric literal is never materialized; and every parsed field, `confidence_percent` included, re-serializes within its bound. Assert no provider text is passed through verbatim.
 8. Test the documented eviction order, that signals are never evicted, that goal text truncates only after all event classes, and that a packet whose signals and goal exceed the budget fails closed to a rule-only assessment.
 9. Test that `truncation` counts are populated on eviction and zeroed on a complete window.
 10. Test that `system_refs` carries every citable non-event fact and that a `sys:` ID absent from the packet is rejected downstream.
@@ -531,14 +532,16 @@
 **Steps:**
 
 1. Parametrize every escalation trigger from the specification, keeping `goal_alignment` and `status` triggers distinct.
-2. Verify healthy Luna results do not call Terra, and that confidence alone never triggers escalation.
+2. Verify healthy Luna results do not call Terra, and that `confidence_percent` alone never triggers escalation.
 3. Verify advisory mode structurally against `schemas/reconciled_assessment.schema.json`: the reconciler emits `state`, `status`, and `notification_status`; only the first and third are derivable without model output, and no model-narrowed status reaches the notifier. Assert the reconciled result validates and that `assessment.schema.json` alone cannot represent it, so the boundary stays a contract rather than a convention.
 4. Test that a reconciled result with `model_assessment: null` is valid and fully populated, which is the rule-only and budget-exhausted path.
-5. Verify deterministic critical signals force attention despite reassuring model output.
-6. Verify Terra prose supersedes Luna only when valid.
-7. Verify timeout falls back to deterministic assessment.
-8. Verify both epochs: `status_epoch` advances only on a `notification_status` change, `attention_epoch` only on a deterministic `needs_attention` false-to-true transition, and neither is advanced by model output.
-9. Commit: `feat: add terra escalation policy`.
+5. Add negative fixtures for every combination the projection forbids, each asserted invalid against the committed schema: `state=idle` with `status=terminal_failed` or `notification_status=identity_broken`; `state=idle` with a non-provisional report; a terminal state with `run_id=null`; and `report_version=1` with a non-null `supersedes`.
+6. Test the domain invariant JSON Schema cannot express: `supersedes < report_version`, and that a report chain never reuses or decreases a version.
+7. Verify deterministic critical signals force attention despite reassuring model output.
+8. Verify Terra prose supersedes Luna only when valid.
+9. Verify timeout falls back to deterministic assessment.
+10. Verify both epochs: `status_epoch` advances only on a `notification_status` change, `attention_epoch` only on a deterministic `needs_attention` false-to-true transition, and neither is advanced by model output.
+11. Commit: `feat: add terra escalation policy`.
 
 ### Task 23: Schedule assessments by evidence change
 
@@ -617,12 +620,13 @@
 3. Test the advisory guarantee: Luna reporting `looping` with no corresponding rule signal changes the displayed status and message body but sends nothing.
 4. Test `status_epoch`: a `waiting -> active_turn -> waiting` cycle sends twice, while repeats inside one episode send once.
 5. Test `attention_epoch`: a signal that activates, clears, and reactivates while `notification_status` stays `progressing` sends twice, since each is a distinct `needs_attention` false-to-true transition. This is the case `status_epoch` alone does not cover.
-6. Test changed prose with identical evidence is suppressed.
-7. Test that an advanced event cursor alone does not change the deduplication key, and that a restart replaying the same window sends nothing.
-8. Test the critical-signal cooldown resend and the digest path.
-9. Test critical evidence always includes a factual reason and event cursor in the body.
-10. Apply trusted-remote redaction, path minimization, Telegram markup escaping, `chat_id` allowlisting, and omission of prompts/output/local links.
-11. Commit: `feat: render deduplicated operator notifications`.
+6. Test that entering `identity_broken` always sends, including when `needs_attention` was already true from an unrelated signal so no false-to-true transition occurs. Ingestion has stopped, and an operator must never silently lose monitoring of a session.
+7. Test changed prose with identical evidence is suppressed.
+8. Test that an advanced event cursor alone does not change the deduplication key, and that a restart replaying the same window sends nothing.
+9. Test the critical-signal cooldown resend and the digest path.
+10. Test critical evidence always includes a factual reason and event cursor in the body.
+11. Apply trusted-remote redaction, path minimization, Telegram markup escaping, `chat_id` allowlisting, and omission of prompts/output/local links.
+12. Commit: `feat: render deduplicated operator notifications`.
 
 ### Task 27: Add Telegram Bot API notifier
 

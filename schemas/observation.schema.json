@@ -327,6 +327,23 @@
             "null"
           ],
           "maxLength": 128
+        },
+        "run_id": {
+          "description": "Execution this event belongs to, or null when no execution is bound. Process lifecycle events must carry it; §5.8 accepts a terminal transition only from evidence whose run_id is the session's current execution.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "execution_epoch": {
+          "description": "Ordinal of that execution within the session, or null when no execution is bound.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100000
         }
       }
     },
