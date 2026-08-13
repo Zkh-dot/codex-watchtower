@@ -69,11 +69,11 @@ Watchtower does not concatenate complete AgentLens and Codex Trace outputs. Both
 ### 4.2 Components
 
 ```text
-~/.codex/sessions/**/rollout-*.jsonl
-                  |
-                  v
-          Session discovery
-                  |
+~/.codex/sessions/**/rollout-*.jsonl      optional `watchtower run` launcher
+                  |                                    |
+                  v                                    v
+          Session discovery <-------------- process evidence store
+                  |                          (PID, exit code, exit time)
                   v
           Incremental parser ------> raw-event cursor/state
                   |
@@ -117,10 +117,10 @@ Responsibilities:
 - watch the configured Codex sessions root;
 - identify new and modified `rollout-*.jsonl` files;
 - extract session ID, workspace, start time, source, model, and original goal;
-- classify lifecycle as `active_turn`, `between_turns`, `waiting`, `terminal_completed`, `terminal_failed`, or `unknown`;
+- classify lifecycle as `active_turn`, `between_turns`, `waiting`, `terminal_completed`, `terminal_completed_unconfirmed`, `terminal_failed`, or `unknown`;
 - map a session to a stable Watchtower record.
 
-The first user task message is the default goal. A launcher integration may supply a clearer explicit goal and path boundaries.
+The first user task message is the default goal. The optional launcher in §5.11 may supply a clearer explicit goal, path boundaries, and process evidence.
 
 ### 5.2 Incremental parser
 
@@ -266,8 +266,9 @@ The reconciler produces the authoritative assessment:
 3. unsupported model evidence references invalidate the response and trigger one retry;
 4. a second invalid response falls back to a rule-generated assessment;
 5. Codex `TurnComplete`/wire `task_complete` changes state to `between_turns`; it never proves terminal session completion;
-6. terminal completion requires launcher/process exit evidence plus a configurable quiet grace period with no new turn, or an explicit operator-provided terminal marker;
-7. terminal failure requires non-zero launcher/process exit evidence or an explicit deterministic process failure rule.
+6. terminal completion requires zero-exit process evidence from §5.11 plus a configurable quiet grace period with no new turn, or an explicit operator-provided terminal marker;
+7. terminal failure requires non-zero process exit evidence from §5.11 or an explicit deterministic process failure rule;
+8. for an unobserved session, where no process evidence exists, the quiet grace period alone yields `terminal_completed_unconfirmed`, which notifies and closes the run report but is never reported as a confirmed outcome.
 
 ### 5.9 Status and operator API
 
@@ -292,7 +293,7 @@ Delivery policy:
 Send when:
 
 - `needs_attention` changes from false to true;
-- status enters `waiting`, `stalled`, `looping`, `off_scope`, `terminal_failed`, or `terminal_completed`;
+- status enters `waiting`, `stalled`, `looping`, `off_scope`, `terminal_failed`, `terminal_completed`, or `terminal_completed_unconfirmed`;
 - a warning persists and materially changes;
 - a configured periodic digest is due, default disabled.
 
@@ -312,6 +313,24 @@ For each key Watchtower persists the last delivery, its cursor, and its send tim
 
 A message includes elapsed time, current action, alignment, concerns, latest test result, redacted changed paths, and session ID/API base when available. Telegram is a separate remote sink: it always applies trusted-remote redaction, never sends prompts or command-output excerpts, validates the configured `chat_id` against an allowlist, escapes Telegram markup, and omits local deep links.
 
+### 5.11 Launcher and process evidence
+
+Rollout JSONL alone cannot distinguish a finished session from an idle one: the last record of a completed run and of a run paused between turns are the same shape. Terminal states in §5.8 therefore require evidence from outside the transcript. Watchtower obtains it in one of three ways, in descending order of confidence.
+
+**Wrapped run (preferred).** `watchtower run -- codex exec ...` spawns Codex as a child, passes stdio through unchanged, and writes a process-evidence record to the state directory:
+
+```text
+{launch_id, argv_hash, pid, started_at, workspace, goal, expected_paths, forbidden_paths, exit_code, exited_at}
+```
+
+The record is created before spawn and updated on exit, including on signal termination. The launcher never inspects, filters, or alters Codex output; it only observes process lifetime. Correlation to a rollout file uses the first `session_meta` record written by that PID under the sessions root after `started_at`; ambiguity yields no correlation rather than a guess.
+
+**Adopted run.** For a session started outside the wrapper, Watchtower may adopt it when the operator enables process adoption: it matches a live Codex process whose working directory equals the session workspace and whose start time precedes the first rollout record, then watches for that PID to disappear. Disappearance without a recorded exit code yields `terminal_completed_unconfirmed`, never `terminal_failed`, because the exit status is unknown.
+
+**Unobserved run.** With neither wrapper nor adoption, only rule 8 of §5.8 applies: after the quiet grace period the session becomes `terminal_completed_unconfirmed`.
+
+Process evidence is a `process_lifecycle` event with `exit_code` set. The launcher is optional; its absence degrades terminal-state confidence and nothing else. It performs no Codex mutation and satisfies the non-goal in §3, since it neither steers nor sends text to Codex.
+
 ## 6. State and persistence
 
 Use SQLite in WAL mode.
@@ -319,6 +338,7 @@ Use SQLite in WAL mode.
 Core tables:
 
 - `sessions`
+- `process_evidence`
 - `event_cursors`
 - `normalized_events`
 - `rule_signals`
@@ -452,7 +472,7 @@ The MVP is accepted when:
 7. Terra runs only under documented escalation conditions.
 8. Deterministic critical signals survive contradictory model output.
 9. Remote-mode packets pass redaction tests with seeded secrets.
-10. Completion notification contains the final status, elapsed time, changed files, tests observed, and session identifier.
+10. A wrapped run reaches `terminal_completed` or `terminal_failed` from process evidence, an unobserved run reaches `terminal_completed_unconfirmed` from the quiet grace period, and both emit a completion notification containing the final status, elapsed time, changed files, tests observed, and session identifier.
 11. The local API and SSE stream survive malformed and unknown Codex events.
 12. The frozen calibration report is committed and release gates are met or explicitly fail closed to rule-only mode.
 

@@ -16,7 +16,7 @@
         "workspace": { "type": "string" },
         "started_at": { "type": "string", "format": "date-time" },
         "elapsed_seconds": { "type": "integer", "minimum": 0 },
-        "state": { "enum": ["active_turn", "between_turns", "waiting", "terminal_completed", "terminal_failed", "unknown"] },
+        "state": { "enum": ["active_turn", "between_turns", "waiting", "terminal_completed", "terminal_completed_unconfirmed", "terminal_failed", "unknown"] },
         "model": { "type": ["string", "null"] }
       }
     },

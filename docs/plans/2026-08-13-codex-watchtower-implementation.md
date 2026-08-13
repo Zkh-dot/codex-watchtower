@@ -138,7 +138,7 @@
 
 ### Task 4: Create SQLite migrations and repository interface
 
-**Objective:** Persist sessions, cursors, normalized events, signals, assessments, model calls, and deliveries in WAL mode.
+**Objective:** Persist sessions, process evidence, cursors, normalized events, signals, assessments, model calls, and deliveries in WAL mode.
 
 **Files:**
 
@@ -243,11 +243,33 @@
 **Steps:**
 
 1. Test multiple turn start/complete sequences remain `between_turns`, not terminally completed.
-2. Test terminal completion from launcher/process exit plus quiet grace period.
+2. Test terminal completion from zero-exit process evidence (Task 9A) plus quiet grace period.
 3. Test terminal failure from non-zero exit and explicit process evidence.
-4. Test a live file with no process evidence remains active/between-turns/unknown.
+4. Test a live file with no process evidence remains active/between-turns/unknown, and that quiet-period expiry without process evidence yields `terminal_completed_unconfirmed`.
 5. Test that prose such as “done” does not mark completion.
 6. Commit: `feat: derive codex lifecycle from explicit events`.
+
+### Task 9A: Capture process evidence for terminal states
+
+**Objective:** Provide the out-of-transcript evidence that §5.11 and reconciler rules 6-8 require, without which no session can leave `between_turns`.
+
+**Files:**
+
+- Create: `src/codex_watchtower/launcher/run.py`
+- Create: `src/codex_watchtower/launcher/evidence.py`
+- Create: `tests/unit/launcher/test_run.py`
+- Create: `tests/unit/launcher/test_adopt.py`
+- Modify: `src/codex_watchtower/storage/migrations/001_initial.sql`
+
+**Steps:**
+
+1. Test that `watchtower run -- <cmd>` passes stdio through unchanged, forwards the child exit code, and forwards SIGINT/SIGTERM to the child.
+2. Test that the evidence record is written before spawn and updated on normal exit, non-zero exit, and signal termination, including when Watchtower itself is not running.
+3. Test correlation from `launch_id` to the first `session_meta` written by that PID after `started_at`, and that ambiguity records no correlation.
+4. Test process adoption: matching workspace and start order, PID disappearance yielding `terminal_completed_unconfirmed`, and PID reuse rejected by start time.
+5. Test that an unobserved session reaches `terminal_completed_unconfirmed` from the quiet grace period alone and never `terminal_failed`.
+6. Emit process evidence as a `process_lifecycle` event with `exit_code`; assert the launcher writes nothing to the child's stdin.
+7. Commit: `feat: capture codex process exit evidence`.
 
 ### Task 10: Add filesystem watcher orchestration
 
@@ -620,7 +642,7 @@
 
 **Steps:**
 
-1. Add `watchtower serve`, `watchtower inspect`, `watchtower assess`, and `watchtower doctor`.
+1. Add `watchtower serve`, `watchtower run`, `watchtower inspect`, `watchtower assess`, and `watchtower doctor`.
 2. Test `doctor` against missing Codex root, unavailable AgentLens, invalid model config, and healthy local setup.
 3. Ensure service hardening includes no root user, private temp, restart policy, and explicit environment file.
 4. Document backup/recovery of the SQLite state.
