@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from typing import Any
 
 from codex_watchtower import domain
 
@@ -124,6 +125,94 @@ class Repository:
 
     def list_sessions(self) -> list[sqlite3.Row]:
         return list(self._conn.execute("SELECT * FROM sessions ORDER BY started_at DESC"))
+
+    def update_session_lifecycle(
+        self,
+        session_id: str,
+        *,
+        state: str,
+        run_id: str | None,
+        execution_epoch: int | None,
+        status_epoch: int,
+        last_event_at: str | None,
+        report_version: int,
+        pending_exit_run_id: str | None,
+        pending_exit_execution_epoch: int | None,
+        pending_exit_exited_at: str | None,
+        fatal_reason: str | None,
+        fatal_detected_at: str | None,
+        fatal_detail: str | None,
+    ) -> None:
+        """Persist the deterministic lifecycle fields codex.lifecycle.LifecycleState owns.
+
+        Repository stays unaware of the lifecycle module's types by design
+        (storage is a lower layer than codex/ingestion); the caller
+        translates LifecycleState to/from these primitive fields.
+        """
+        self._conn.execute(
+            """
+            UPDATE sessions SET
+                state = ?, current_run_id = ?, current_execution_epoch = ?,
+                status_epoch = ?, last_event_at = ?, report_version = ?,
+                pending_exit_run_id = ?, pending_exit_execution_epoch = ?,
+                pending_exit_exited_at = ?, fatal_reason = ?, fatal_detected_at = ?,
+                fatal_detail = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE session_id = ?
+            """,
+            (
+                state,
+                run_id,
+                execution_epoch,
+                status_epoch,
+                last_event_at,
+                report_version,
+                pending_exit_run_id,
+                pending_exit_execution_epoch,
+                pending_exit_exited_at,
+                fatal_reason,
+                fatal_detected_at,
+                fatal_detail,
+                session_id,
+            ),
+        )
+
+    # --- reports -------------------------------------------------------
+
+    def insert_report(
+        self,
+        session_id: str,
+        *,
+        report_version: int,
+        run_id: str | None,
+        execution_epoch: int | None,
+        provisional: bool,
+        supersedes: int | None,
+        body: dict[str, Any],
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO reports (
+                session_id, report_version, run_id, execution_epoch, provisional,
+                supersedes, body
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                report_version,
+                run_id,
+                execution_epoch,
+                1 if provisional else 0,
+                supersedes,
+                json.dumps(body),
+            ),
+        )
+
+    def get_report(self, session_id: str, report_version: int) -> sqlite3.Row | None:
+        row: sqlite3.Row | None = self._conn.execute(
+            "SELECT * FROM reports WHERE session_id = ? AND report_version = ?",
+            (session_id, report_version),
+        ).fetchone()
+        return row
 
     # --- tailer cursor (internal; never leaves the process) ---------
 
