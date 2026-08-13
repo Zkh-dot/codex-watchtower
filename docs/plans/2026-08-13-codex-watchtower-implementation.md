@@ -79,7 +79,7 @@
 - Create: `src/codex_watchtower/cli.py`
 - Create: `tests/test_smoke.py`
 - Create: `.github/workflows/ci.yml`
-- Create: `.gitignore`
+- Modify: `.gitignore`
 
 **Steps:**
 
@@ -173,7 +173,7 @@
 **Steps:**
 
 1. Seed a corrupt database fixture and assert startup fails with a typed fatal error.
-2. Test that the original file remains byte-identical.
+2. Test that the main database file remains byte-identical. Run the check over an immutable URI (`file:...?immutable=1`) so the probe cannot create `-wal` or `-shm` sidecars, and assert none appear.
 3. Add `PRAGMA quick_check` startup validation and a clear recovery message.
 4. Commit: `feat: fail safely on state database corruption`.
 

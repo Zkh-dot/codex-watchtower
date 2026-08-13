@@ -152,7 +152,7 @@ The normalizer converts version-specific Codex records into `WatchtowerEvent` va
 - `reasoning`
 - `command`
 - `command_result`
-- `file_read`
+- `file_read`, aggregated per turn into a count plus a path set rather than one event per read, so read-heavy turns do not consume the packet budget
 - `file_changed`
 - `test_result`
 - `error`
