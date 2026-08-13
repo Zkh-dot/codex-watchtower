@@ -342,6 +342,20 @@ class Repository:
         ).fetchone()
         return None if row is None else row["m"]
 
+    def get_recent_domain_events(self, session_id: str, *, limit: int = 500) -> list[domain.Event]:
+        """Recent events as domain.Event, for feeding the rule engine (spec 5.5).
+
+        Rule functions filter by timestamp window internally, so a bounded
+        recent tail is sufficient input; ``limit`` only guards against
+        reconstructing an unbounded number of rows for a very long session.
+        """
+        rows = self._conn.execute(
+            "SELECT * FROM normalized_events WHERE session_id = ? "
+            "ORDER BY event_sequence DESC LIMIT ?",
+            (session_id, limit),
+        )
+        return [row_to_domain_event(row) for row in reversed(list(rows))]
+
     # --- rule signals --------------------------------------------------
 
     def upsert_signal(self, session_id: str, signal: domain.Signal, *, active: bool) -> None:
@@ -393,6 +407,64 @@ class Repository:
             )
             for row in rows
         ]
+
+    def deactivate_all_signals(self, session_id: str) -> None:
+        self._conn.execute("UPDATE rule_signals SET active = 0 WHERE session_id = ?", (session_id,))
+
+    # --- reconciled assessments (spec 5.8) --------------------------
+
+    def save_reconciled(
+        self, reconciled: domain.ReconciledAssessment, *, lifecycle_status_epoch: int
+    ) -> None:
+        """Persist the latest reconciled result for its session.
+
+        ``lifecycle_status_epoch`` is recorded alongside the exposed
+        ``status_epoch`` (which can differ from it once rule-narrowing
+        increments have been layered on top -- see assess/policy.py's
+        module docstring) so the next reconciliation can compute its delta
+        against ``lifecycle_state.status_epoch`` correctly.
+        """
+        self._conn.execute(
+            """
+            INSERT INTO reconciled_assessments (
+                session_id, notification_status, status_epoch, lifecycle_status_epoch,
+                attention_epoch, needs_attention, body, reconciled_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (session_id) DO UPDATE SET
+                notification_status = excluded.notification_status,
+                status_epoch = excluded.status_epoch,
+                lifecycle_status_epoch = excluded.lifecycle_status_epoch,
+                attention_epoch = excluded.attention_epoch,
+                needs_attention = excluded.needs_attention,
+                body = excluded.body,
+                reconciled_at = excluded.reconciled_at
+            """,
+            (
+                reconciled.session_id,
+                reconciled.notification_status.value,
+                reconciled.status_epoch,
+                lifecycle_status_epoch,
+                reconciled.attention_epoch,
+                1 if reconciled.needs_attention else 0,
+                json.dumps(reconciled.model_dump(mode="json")),
+                reconciled.reconciled_at,
+            ),
+        )
+
+    def get_latest_reconciled(self, session_id: str) -> domain.ReconciledAssessment | None:
+        row = self._conn.execute(
+            "SELECT body FROM reconciled_assessments WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return domain.ReconciledAssessment.model_validate(json.loads(row["body"]))
+
+    def get_reconciled_row(self, session_id: str) -> sqlite3.Row | None:
+        """Raw row access for the epoch bookkeeping columns, not just the JSON body."""
+        row: sqlite3.Row | None = self._conn.execute(
+            "SELECT * FROM reconciled_assessments WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        return row
 
     # --- assessments -----------------------------------------------
 
@@ -615,6 +687,20 @@ class Repository:
             (session_id,),
         )
         return [_row_to_process_evidence(row) for row in rows]
+
+
+def row_to_domain_event(row: sqlite3.Row) -> domain.Event:
+    return domain.Event(
+        id=row["logical_event_id"],
+        timestamp=row["timestamp"],
+        kind=domain.EventKind(row["kind"]),
+        summary=row["summary"],
+        path=row["path"],
+        exit_code=row["exit_code"],
+        source_type=row["source_type"],
+        run_id=row["run_id"],
+        execution_epoch=row["execution_epoch"],
+    )
 
 
 def _row_to_process_evidence(row: sqlite3.Row) -> ProcessEvidenceRecord:

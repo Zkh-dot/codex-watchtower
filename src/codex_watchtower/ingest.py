@@ -9,16 +9,26 @@ restart-safety) live in ``poll_once`` and do not depend on *what* woke it up.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from codex_watchtower import domain
+from codex_watchtower.assess import policy
 from codex_watchtower.codex import lifecycle
 from codex_watchtower.codex.discovery import DiscoveredSession, discover_sessions
 from codex_watchtower.codex.normalize import normalize_record
 from codex_watchtower.codex.tailer import IdentityBroken, read_new_records, resolve_start
+from codex_watchtower.rules.progress import detect_stagnation
+from codex_watchtower.rules.repetition import detect_recurring_errors, detect_repeated_commands
+from codex_watchtower.rules.scope import detect_scope_violations
+from codex_watchtower.rules.tests import detect_test_regression
 from codex_watchtower.storage.repository import Repository, SourceLocator
+
+
+def _parse_ts(ts: str) -> datetime:
+    return datetime.fromisoformat(ts[:-1] + "+00:00" if ts.endswith("Z") else ts)
 
 
 def _lifecycle_from_row(session_id: str, row: sqlite3.Row) -> lifecycle.LifecycleState:
@@ -176,6 +186,82 @@ class IngestionService:
             )
 
         _persist_lifecycle(self.repo, state)
+        self._run_rules_and_reconcile(session_id, discovered.workspace or "", state, now)
+
+    def _run_rules_and_reconcile(
+        self, session_id: str, workspace: str, state: lifecycle.LifecycleState, now: datetime
+    ) -> None:
+        """Run the deterministic rule engine and persist the reconciled result.
+
+        Model assessment is deliberately not invoked from the automatic
+        ingestion loop: it requires configured model credentials
+        (models/config.py), which is an operator/scheduler-driven concern
+        (assess/scheduler.py), not something the ingestion pass forces on
+        every poll. Monitoring stays fully functional rule-only, matching
+        v0.1.0 advisory mode (spec 10.3).
+        """
+        session_row = self.repo.get_session(session_id)
+        expected_paths = json.loads(session_row["expected_paths"]) if session_row else []
+        forbidden_paths = json.loads(session_row["forbidden_paths"]) if session_row else []
+        started_at_str = session_row["started_at"] if session_row else now.isoformat()
+
+        recent_events = self.repo.get_recent_domain_events(session_id)
+
+        local_signals: list[domain.Signal] = []
+        local_signals.extend(detect_repeated_commands(recent_events, now=now))
+        local_signals.extend(detect_recurring_errors(recent_events, now=now))
+        stagnation = detect_stagnation(
+            recent_events, now=now, session_reference_time=_parse_ts(started_at_str)
+        )
+        if stagnation is not None:
+            local_signals.append(stagnation)
+        if workspace:
+            local_signals.extend(
+                detect_scope_violations(
+                    recent_events,
+                    workspace=Path(workspace),
+                    expected_paths=expected_paths,
+                    forbidden_paths=forbidden_paths,
+                )
+            )
+        test_regression = detect_test_regression(recent_events)
+        if test_regression is not None:
+            local_signals.append(test_regression)
+
+        self.repo.deactivate_all_signals(session_id)
+        for signal in local_signals:
+            self.repo.upsert_signal(session_id, signal, active=True)
+        active_signals = self.repo.get_active_signals(session_id)
+
+        previous_row = self.repo.get_reconciled_row(session_id)
+        if previous_row is not None:
+            previous = policy.PreviousReconciliationState(
+                notification_status=domain.NotificationStatus(previous_row["notification_status"]),
+                status_epoch=previous_row["status_epoch"],
+                lifecycle_status_epoch=previous_row["lifecycle_status_epoch"],
+                attention_epoch=previous_row["attention_epoch"],
+                needs_attention=bool(previous_row["needs_attention"]),
+            )
+        else:
+            previous = policy.PreviousReconciliationState(
+                notification_status=None,
+                status_epoch=0,
+                lifecycle_status_epoch=0,
+                attention_epoch=0,
+                needs_attention=False,
+            )
+
+        reconciled = policy.reconcile(
+            session_id=session_id,
+            lifecycle_state=state,
+            active_signals=active_signals,
+            model_assessment=None,
+            report=None,
+            event_cursor=self.repo.max_event_sequence(session_id),
+            previous=previous,
+            now=now,
+        )
+        self.repo.save_reconciled(reconciled, lifecycle_status_epoch=state.status_epoch)
 
 
 def watch_forever(

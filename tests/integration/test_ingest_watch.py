@@ -107,6 +107,69 @@ def test_restart_does_not_duplicate_events(tmp_path: Path) -> None:
     assert len({e["logical_event_id"] for e in events}) == 2
 
 
+def test_poll_once_persists_a_reconciled_assessment(tmp_path: Path) -> None:
+    sessions_root = tmp_path / "sessions"
+    rollout = sessions_root / "2026" / "08" / "13" / "rollout-1.jsonl"
+    _write(
+        rollout,
+        [
+            {
+                "type": "session_meta",
+                "timestamp": "2026-08-13T10:00:00Z",
+                "payload": {"id": "sess-1", "cwd": "/w"},
+            },
+            {"type": "turn_started", "timestamp": "2026-08-13T10:00:05Z", "payload": {}},
+        ],
+    )
+    conn = db.open_database(tmp_path / "state.db")
+    repo = Repository(conn)
+    IngestionService(sessions_root, repo).poll_once(now=NOW)
+
+    reconciled = repo.get_latest_reconciled("sess-1")
+    assert reconciled is not None
+    assert reconciled.session_id == "sess-1"
+    assert reconciled.state == domain.SessionState.active_turn
+    assert reconciled.model_assessment is None
+    reconciled.validate_against_schema()
+
+
+def test_forbidden_path_change_produces_active_signal_and_needs_attention(
+    tmp_path: Path,
+) -> None:
+    sessions_root = tmp_path / "sessions"
+    rollout = sessions_root / "2026" / "08" / "13" / "rollout-1.jsonl"
+    _write(
+        rollout,
+        [
+            {
+                "type": "session_meta",
+                "timestamp": "2026-08-13T10:00:00Z",
+                "payload": {"id": "sess-1", "cwd": str(tmp_path)},
+            },
+            {
+                "type": "file_change",
+                "timestamp": "2026-08-13T10:00:05Z",
+                "payload": {"path": "secrets/key.pem", "change": "modified"},
+            },
+        ],
+    )
+    conn = db.open_database(tmp_path / "state.db")
+    repo = Repository(conn)
+    repo.upsert_session(
+        "sess-1",
+        workspace=str(tmp_path),
+        started_at="2026-08-13T10:00:00Z",
+        state="unknown",
+        forbidden_paths=["secrets/"],
+    )
+    IngestionService(sessions_root, repo).poll_once(now=NOW)
+
+    reconciled = repo.get_latest_reconciled("sess-1")
+    assert reconciled is not None
+    assert reconciled.needs_attention is True
+    assert any(s.kind == domain.SignalKind.forbidden_path for s in reconciled.active_signals)
+
+
 def test_terminal_completion_emits_a_report(tmp_path: Path) -> None:
     from datetime import timedelta
 

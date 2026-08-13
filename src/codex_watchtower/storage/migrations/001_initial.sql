@@ -150,6 +150,21 @@ CREATE TABLE IF NOT EXISTS reports (
     PRIMARY KEY (session_id, report_version)
 );
 
+-- Latest reconciled result per session (spec 5.8); the API and notifier
+-- both read from here. Stored as the validated JSON body plus a few
+-- indexed columns the reconciler's own epoch arithmetic needs on the next
+-- pass (spec 5.8's "seeded from the previous reconciliation's value").
+CREATE TABLE IF NOT EXISTS reconciled_assessments (
+    session_id TEXT PRIMARY KEY REFERENCES sessions (session_id),
+    notification_status TEXT NOT NULL,
+    status_epoch INTEGER NOT NULL,
+    lifecycle_status_epoch INTEGER NOT NULL,
+    attention_epoch INTEGER NOT NULL,
+    needs_attention INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    reconciled_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS deliveries (
     dedup_key TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions (session_id),
