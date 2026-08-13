@@ -279,12 +279,16 @@ Luna is not allowed to clear deterministic warnings. It can only contextualize t
 
 Invoked when any condition holds:
 
-- Luna confidence is below `0.72`;
-- Luna reports `possibly_aligned`, `misaligned`, `stalled`, `looping`, or `off_scope`;
 - any deterministic critical signal is present;
 - deterministic evidence conflicts with Luna;
+- Luna reports `goal_alignment` of `possibly_aligned` or `misaligned`;
+- Luna reports `status` of `stalled`, `looping`, or `off_scope`;
 - stagnation exceeds 25 minutes;
 - the operator requests a deep assessment.
+
+The trigger list separates `goal_alignment` values from `status` values, which are different fields with different enums and were previously mixed into one list.
+
+Self-reported confidence is not a trigger. A `0.72` threshold on a model's own confidence assumes a calibration that language models generally do not have, and carries more precision than the underlying number supports. Confidence is recorded, surfaced in the API, and used as a tie-breaker when another trigger already fired; a numeric threshold may be added later if calibration data shows the value separates outcomes.
 
 Terra receives the same observation plus Luna's assessment and an explicit request to adjudicate conflicts. It does not receive the entire transcript unless a future operator-authorized forensic mode is added.
 
@@ -482,6 +486,12 @@ Commit synthetic and redacted JSONL fixtures covering:
 
 ### 10.3 Model calibration
 
+Calibration gates v0.2.0, not v0.1.0. It requires at least 30 completed real sessions covering looping, off-scope, and failed outcomes, plus hand labeling with evidence IDs; that corpus does not exist yet and cannot be manufactured honestly. Blocking the first release on it would withhold the deterministic rules, which are useful without any model at all.
+
+v0.1.0 therefore ships in **advisory mode**: deterministic rules are authoritative and notify on their own, Luna assessments are produced and shown in the API and in message bodies, and no notification decision depends on model output. Terra escalation is available but off by default. Advisory mode is not a degraded fallback; it is the supported first release, and the failure modes calibration protects against cannot occur while notification is rule-driven.
+
+v0.2.0 promotes model output to a notification input only after the gates below pass.
+
 Build a frozen evaluation set of at least 30 completed sessions, sampled across healthy, ambiguous, stalled, looping, off-scope, failed, and completed outcomes.
 
 Human labels include:
@@ -501,14 +511,18 @@ Measure Luna and Terra independently:
 - summary factuality;
 - latency and input tokens.
 
-Initial release gates:
+Gates for promoting model output out of advisory mode in v0.2.0:
 
 - no unsupported evidence citations in the acceptance corpus;
 - attention recall at least 0.90 on deterministic anomaly cases;
 - false attention rate at most 0.15 on healthy sessions;
-- Terra improves ambiguous-case accuracy over Luna by at least 10 percentage points, otherwise remove the cascade complexity.
+- Terra measurably improves ambiguous-case accuracy over Luna.
+
+The Terra gate is qualitative on purpose. A fixed 10-percentage-point threshold measured on the ambiguous subset of a 30-session corpus is decided by one or two labels, which is noise rather than evidence. Either collect at least 30 ambiguous cases before applying a numeric threshold, or make the keep-or-remove decision from the reviewed disagreement set with recorded rationale and reviewer sign-off. Do not report a percentage-point improvement from a handful of labels as if it were a measurement.
 
 ## 11. MVP acceptance criteria
+
+Criteria 1-11 gate v0.1.0 in advisory mode. Criterion 12 gates v0.2.0, when model output first influences notification.
 
 The MVP is accepted when:
 
@@ -523,7 +537,7 @@ The MVP is accepted when:
 9. Remote-mode packets pass redaction tests with seeded secrets.
 10. A wrapped run reaches `terminal_completed` or `terminal_failed` from process evidence, an unobserved run reaches `terminal_completed_unconfirmed` from the quiet grace period, and both emit a completion notification containing the final status, elapsed time, changed files, tests observed, and session identifier.
 11. The local API and SSE stream survive malformed and unknown Codex events.
-12. The frozen calibration report is committed and release gates are met or explicitly fail closed to rule-only mode.
+12. For v0.2.0 only: the frozen calibration report is committed and the promotion gates are met, or the system stays in advisory mode.
 
 ## 12. Open design choices deferred to implementation
 

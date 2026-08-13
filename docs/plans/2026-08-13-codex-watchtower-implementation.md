@@ -514,12 +514,13 @@
 
 **Steps:**
 
-1. Parametrize every escalation trigger from the specification.
-2. Verify healthy/high-confidence Luna results do not call Terra.
-3. Verify deterministic critical signals force attention despite reassuring model output.
-4. Verify Terra prose supersedes Luna only when valid.
-5. Verify timeout falls back to deterministic assessment.
-6. Commit: `feat: add terra escalation policy`.
+1. Parametrize every escalation trigger from the specification, keeping `goal_alignment` and `status` triggers distinct.
+2. Verify healthy Luna results do not call Terra, and that confidence alone never triggers escalation.
+3. Verify advisory mode: Luna and Terra output reaches the API and message bodies but changes no notification decision.
+4. Verify deterministic critical signals force attention despite reassuring model output.
+5. Verify Terra prose supersedes Luna only when valid.
+6. Verify timeout falls back to deterministic assessment.
+7. Commit: `feat: add terra escalation policy`.
 
 ### Task 23: Schedule assessments by evidence change
 
@@ -679,6 +680,8 @@
 
 ## Phase 10: Replay corpus and model calibration
 
+Phase 10 gates v0.2.0, not v0.1.0. v0.1.0 ships in advisory mode per specification section 10.3: deterministic rules notify on their own and no notification decision depends on model output, so the corpus is not on the first release's critical path. Tasks 31 and 32 may begin as soon as completed sessions accumulate.
+
 ### Task 31: Build redacted replay fixture tooling
 
 **Objective:** Convert completed rollouts into reviewable fixtures without committing secrets or proprietary source content.
@@ -739,8 +742,9 @@
 4. Run smoke only; review cost/latency/results with the operator.
 5. After approval, run full evaluation and write a dated report.
 6. Enforce the release gates from the specification.
-7. If Terra fails to improve ambiguous cases by ten percentage points, disable automatic escalation and document the decision.
-8. Commit: `eval: calibrate luna and terra assessment cascade`.
+7. Report the ambiguous-case count alongside any accuracy comparison, and refuse to emit a percentage-point verdict below 30 ambiguous cases.
+8. Decide keep-or-remove for the cascade from the reviewed disagreement set with recorded rationale and reviewer sign-off; if Terra does not improve ambiguous cases, disable automatic escalation and document it.
+9. Commit: `eval: calibrate luna and terra assessment cascade`.
 
 ## Phase 11: End-to-end verification and release
 
@@ -814,7 +818,7 @@
 **Steps:**
 
 1. Verify clean worktree and remote CI success.
-2. Create `v0.1.0` release notes referencing the calibration and acceptance reports.
+2. Create `v0.1.0` release notes referencing the acceptance report, stating that model output is advisory and that calibration gates v0.2.0.
 3. Tag and publish the release.
 4. Install from the released artifact in a clean environment.
 5. Run `watchtower doctor` and one synthetic replay.
@@ -822,6 +826,7 @@
 ## Execution order and review gates
 
 - Phases 0–5 can proceed without paid inference.
+- v0.1.0 requires Phases -1 through 9 in advisory mode. Phase 10 and acceptance criterion 12 gate v0.2.0.
 - Before Phase 6, verify the actual Luna/Terra provider interface and structured-output support with isolated smoke requests.
 - Before Task 32 full corpus generation or Task 33 full evaluation, run the five-session smoke and obtain approval for the long/paid run.
 - Before enabling Telegram against a real chat, test against a local/mock endpoint and inspect rendered messages.
@@ -833,7 +838,8 @@ Implementation is complete only when:
 
 - every MVP acceptance criterion has fresh evidence;
 - the full deterministic suite passes;
-- the model calibration report passes its gates or the system fails closed to rule-only mode;
+- for v0.1.0, model output is advisory and no notification depends on it;
+- for v0.2.0, the model calibration report passes its promotion gates or the system stays advisory;
 - restart and degraded-service E2E tests pass;
 - CI is green on the pushed commit;
 - a clean install of the release reproduces the smoke test.
