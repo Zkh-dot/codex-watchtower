@@ -190,7 +190,10 @@ Some invariants are cross-field or cross-collection and cannot be written in JSO
 - every `signal.event_ids` entry resolving to an event present in the same packet;
 - every assessment evidence `ref_id` resolving to a packet event, signal, or `system_refs` ID, and every `basis_ids` entry resolving to an `evidence[].ref_id`;
 - `report.supersedes < report.report_version`, with a report chain that never reuses or decreases a version;
-- `execution_epoch` and `run_id` either both null or both set.
+- `execution_epoch` and `run_id` either both null or both set;
+- `signal_fingerprint` equal to the canonical digest of `active_signals`, which JSON Schema cannot recompute.
+
+Encoded directly in `schemas/reconciled_assessment.schema.json` rather than listed here, because they are finite implications: a rule-derived `notification_status` requires a matching signal kind in `active_signals`, an active critical signal forces `needs_attention`, a `process_lifecycle` event requires `run_id`, `execution_epoch`, and `exit_code`, and `fatal` and `identity_broken` require each other.
 
 The rule is that a guarantee stated in the specification is either expressible in a committed schema and encoded there, or listed here with a test. It is not left to prose.
 
@@ -396,7 +399,20 @@ Reopening is a first-class transition on both paths:
 - either path emits a supersede notice referencing the superseded `report_version`, so an operator who already read a summary learns the run continued;
 - the reopened session keeps its session ID, cursors, and event sequence; nothing is re-ingested and no event is re-notified;
 - a stale deduplication entry cannot suppress alerts in the reopened episode, because `status_epoch` has advanced;
-- a session may reopen repeatedly from either path, each reopen producing a new report version, up to the committed maxima: 100,000 executions and report versions, 1,000,000 status and attention epochs. These are not decorative. A counter that saturates cannot represent the next state, so at the cap Watchtower stops incrementing, marks the session `identity_broken` with a critical signal naming the exhausted counter, and requires a new session rather than silently reusing an epoch and colliding deduplication keys. The bounds exist because §5.6 requires every field to be finite; the previous "any number of times" was not expressible under them.
+- a session may reopen repeatedly from either path, each reopen producing a new report version, up to the committed maxima: 100,000 executions and report versions, 1,000,000 status and attention epochs. These are not decorative. A counter that saturates cannot represent the next state, so at the cap Watchtower stops incrementing and moves the session to the fatal path below rather than silently reusing an epoch and colliding deduplication keys. The bounds exist because §5.6 requires every field to be finite; the previous "any number of times" was not expressible under them.
+
+#### Fatal conditions
+
+A fatal condition cannot be signalled through the epochs, because one of the conditions is that an epoch has saturated. Routing it through `status_epoch` would make the fail-closed state unreachable in exactly the case that motivates it: entering `identity_broken` changes `notification_status`, which §5.10 requires to increment `status_epoch`, which at the maximum is not representable — and freezing the counter would break the increment-on-change rule while decrementing it is forbidden.
+
+The reconciled result therefore carries a separate `fatal` field, null in normal operation, holding a reason and detection time when set. Its reasons are `prefix_mismatch`, `status_epoch_exhausted`, `attention_epoch_exhausted`, `execution_epoch_exhausted`, and `report_version_exhausted`.
+
+Setting `fatal` is out of band with respect to both epochs:
+
+- the session moves to `state=identity_broken` and `notification_status=identity_broken`, and both are required whenever `fatal` is set, so neither can appear without the other;
+- both epochs freeze at their current values. The increment-on-change rule of §5.10 applies only while `fatal` is null, and this is its single documented exception;
+- the fatal message is delivered exactly once under its own deduplication identity, `session_id + "fatal" + reason`, which contains no epoch and therefore cannot collide with or be suppressed by a saturated counter;
+- ingestion for the session stops and no further notifications are sent for it. Recovery is an operator action.
 
 #### Session state and assessment status
 
@@ -550,7 +566,9 @@ The packet records which redaction classes were applied, never the removed value
 
 Repository files, command output, logs, and agent messages are untrusted data. The assessment prompt states that embedded instructions are evidence, not commands. The model receives no tools and cannot write files or contact Codex.
 
-Remote model transport requires valid HTTPS certificates, rejects redirects, link-local/loopback/metadata destinations and proxy-environment inheritance by default, caps request/response sizes and retry budgets, and records provider retention/logging policy plus explicit operator consent before first transmission. Local mode may use loopback HTTP.
+Remote model transport requires valid HTTPS certificates, rejects redirects, link-local/loopback/metadata destinations and proxy-environment inheritance by default, and records provider retention/logging policy plus explicit operator consent before first transmission.
+
+Response reading is bounded concretely, because §5.6 finiteness depends on it: the client reads at most `model.max_response_bytes`, default **1 MiB**, configurable within 64 KiB to 8 MiB. It streams and counts bytes, aborts as soon as the cap is exceeded, and rejects the response **before** `json.loads`, so an oversized literal is never parsed or materialized. An aborted response is a transport failure subject to the existing retry budget and never retried in a way that multiplies the cap. Requests are bounded by §5.6. Local mode may use loopback HTTP.
 
 ## 8. Failure handling
 

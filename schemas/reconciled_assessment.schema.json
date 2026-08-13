@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ya-yara/codex-watchtower/schemas/reconciled_assessment.schema.json",
   "title": "WatchtowerReconciledAssessment",
-  "description": "Authoritative output of the policy reconciler (specification 5.8) and the payload of the status API and notifier. Separates the three status fields the design requires: deterministic lifecycle state, display status which a model may narrow, and notification_status which is deterministic-only and is the sole field the notifier reads. assessment.schema.json remains the model-produced contract and is embedded here unchanged, so the advisory-mode boundary is expressible and testable rather than conventional. The allOf block encodes the reconciliation projection itself, not merely field shapes: which statuses each lifecycle state permits, which part of notification_status is lifecycle-derived, that a terminal state carries the execution that produced it, and that report provisionality follows from state. supersedes < report_version is a domain invariant, since JSON Schema cannot compare two sibling values. Every field is capped so a serialized instance is finite.",
+  "description": "Authoritative output of the policy reconciler (specification 5.8) and the payload of the status API and notifier. Separates the three status fields the design requires: deterministic lifecycle state, display status which a model may narrow, and notification_status which is deterministic-only and is the sole field the notifier reads. assessment.schema.json remains the model-produced contract and is embedded here unchanged, so the advisory-mode boundary is expressible and testable rather than conventional. The allOf block encodes the reconciliation projection itself, not merely field shapes: which statuses each lifecycle state permits, which part of notification_status is lifecycle-derived, that a terminal state carries the execution that produced it, and that report provisionality follows from state. It also binds the rule-derived notification statuses to the signals that justify them and forces needs_attention when a critical signal is active. supersedes < report_version and signal_fingerprint being the canonical digest of active_signals are domain invariants, since JSON Schema cannot compare two sibling values or recompute a digest. Every field is capped so a serialized instance is finite.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -15,6 +15,7 @@
     "notification_status",
     "status_epoch",
     "attention_epoch",
+    "fatal",
     "needs_attention",
     "active_signals",
     "signal_fingerprint",
@@ -105,6 +106,45 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 1000000
+    },
+    "fatal": {
+      "description": "Session-level fatal condition, or null. Deliberately independent of status_epoch and attention_epoch: a counter that has saturated cannot represent another increment, so a fatal state signalled through those counters would be unreachable exactly when it is needed. Setting this field freezes both epochs and is delivered once under its own deduplication identity.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reason",
+            "detected_at"
+          ],
+          "properties": {
+            "reason": {
+              "enum": [
+                "prefix_mismatch",
+                "status_epoch_exhausted",
+                "attention_epoch_exhausted",
+                "execution_epoch_exhausted",
+                "report_version_exhausted"
+              ]
+            },
+            "detected_at": {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 40
+            },
+            "detail": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 500
+            }
+          }
+        }
+      ]
     },
     "needs_attention": {
       "description": "Deterministic. A model may not set or clear it.",
@@ -560,6 +600,177 @@
                 "type": "null"
               }
             }
+          }
+        }
+      }
+    },
+    {
+      "title": "notification_status stalled requires a matching deterministic signal",
+      "if": {
+        "properties": {
+          "notification_status": {
+            "const": "stalled"
+          }
+        },
+        "required": [
+          "notification_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "active_signals": {
+            "contains": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "stagnation"
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "minContains": 1
+          }
+        }
+      }
+    },
+    {
+      "title": "notification_status looping requires a matching deterministic signal",
+      "if": {
+        "properties": {
+          "notification_status": {
+            "const": "looping"
+          }
+        },
+        "required": [
+          "notification_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "active_signals": {
+            "contains": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "repeated_command",
+                    "recurring_error"
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "minContains": 1
+          }
+        }
+      }
+    },
+    {
+      "title": "notification_status off_scope requires a matching deterministic signal",
+      "if": {
+        "properties": {
+          "notification_status": {
+            "const": "off_scope"
+          }
+        },
+        "required": [
+          "notification_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "active_signals": {
+            "contains": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "scope_expansion",
+                    "forbidden_path"
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "minContains": 1
+          }
+        }
+      }
+    },
+    {
+      "title": "an active critical signal forces needs_attention",
+      "if": {
+        "properties": {
+          "active_signals": {
+            "contains": {
+              "properties": {
+                "severity": {
+                  "const": "critical"
+                }
+              },
+              "required": [
+                "severity"
+              ]
+            },
+            "minContains": 1
+          }
+        },
+        "required": [
+          "active_signals"
+        ]
+      },
+      "then": {
+        "properties": {
+          "needs_attention": {
+            "const": true
+          }
+        }
+      }
+    },
+    {
+      "title": "a fatal condition is exactly the identity_broken state",
+      "if": {
+        "properties": {
+          "fatal": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "fatal"
+        ]
+      },
+      "then": {
+        "properties": {
+          "state": {
+            "const": "identity_broken"
+          },
+          "notification_status": {
+            "const": "identity_broken"
+          }
+        }
+      }
+    },
+    {
+      "title": "identity_broken must name why",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "identity_broken"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "fatal": {
+            "type": "object"
           }
         }
       }

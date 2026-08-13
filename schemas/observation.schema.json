@@ -345,7 +345,40 @@
           "minimum": 0,
           "maximum": 100000
         }
-      }
+      },
+      "allOf": [
+        {
+          "title": "a process lifecycle event must identify the execution it reports on",
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "process_lifecycle"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "run_id",
+              "execution_epoch",
+              "exit_code"
+            ],
+            "properties": {
+              "run_id": {
+                "type": "string"
+              },
+              "execution_epoch": {
+                "type": "integer"
+              },
+              "exit_code": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      ]
     },
     "signal": {
       "type": "object",

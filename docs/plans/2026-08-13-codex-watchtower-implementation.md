@@ -238,8 +238,9 @@
 4. Regression-test both failure modes of the relative ordinal this replaces: two identical records where recovery starts after the first must not give the survivor the first record's ID, and a count continued from a stored total must not insert a replayed record twice. Both must hold for replay from the file start and from a checkpoint.
 5. Redact before persistence, bound command output, and retain only redacted summary plus source hash/original byte length.
 6. Ensure unknown events become `kind=unknown` with source type preserved.
-7. Test that turn boundaries normalize to `turn_lifecycle` and process boundaries to `process_lifecycle`, and that no single `lifecycle` kind is emitted.
-8. Commit: `feat: normalize codex rollout events`.
+7. Add a negative fixture: a `process_lifecycle` event without `run_id`, `execution_epoch`, or `exit_code` must fail schema validation, since execution scope is what keeps a late exit from terminating a later execution.
+8. Test that turn boundaries normalize to `turn_lifecycle` and process boundaries to `process_lifecycle`, and that no single `lifecycle` kind is emitted.
+9. Commit: `feat: normalize codex rollout events`.
 
 ### Task 9: Classify lifecycle without model inference
 
@@ -259,7 +260,7 @@
 5. Test the reopen transition from `idle`: any new event returns the session to `active_turn`, keeps its session ID, cursors, and event sequence, re-ingests nothing, and advances `status_epoch` **only**. `execution_epoch` and `run_id` must not move: the same process resuming work after a quiet period is not a new execution. An unobserved session keeps both null rather than reporting a fictitious execution 0.
 6. Test reopen from an execution-terminal state: a zero-exit wrapped execution reports `terminal_completed`, then `codex exec resume <same-session-id> --json` opens a new execution, returns the session to `active_turn`, and advances `execution_epoch`. No terminal state may be treated as the end of a persisted session.
 7. Test that repeated reopen cycles from either path each produce a new report version and a supersede notice.
-8. Test counter exhaustion: at the committed maximum for `execution_epoch`, `report_version`, `status_epoch`, or `attention_epoch`, the session is marked `identity_broken` with a critical signal naming the exhausted counter, and no epoch is reused or decreased.
+8. Test counter exhaustion starting **at** the maximum, not one below it, for each of `status_epoch`, `attention_epoch`, `execution_epoch`, and `report_version`. The session must reach `fatal` with the matching reason and `identity_broken`, both epochs must freeze rather than increment or decrease, and the fatal message must deliver under its own identity. The `status_epoch` case is the one that is unreachable if the fatal path depends on incrementing that counter.
 9. Test that prose such as “done” does not mark completion.
 10. Commit: `feat: derive codex lifecycle from explicit events`.
 
@@ -470,7 +471,7 @@
 4. Prove finiteness structurally: walk both schemas and assert every string has `maxLength`, every array `maxItems`, every numeric `maximum`, and every object with `additionalProperties` a `maxProperties`. This test fails when a future field is added without a cap, which is how the previous gap appeared.
 5. Compute the theoretical worst-case serialized request from the schema caps and assert it is finite. Do not assert it fits the budget: 200 events at 4,000 characters already exceed 48,000, so that assertion is unsatisfiable by construction.
 6. Prove the runtime bound instead: build a request from maximal inputs (goal at `maxLength`, a previous assessment at its own maxima, 200 maximal events, 64 maximal signals with payloads at `maxProperties`) and assert the builder either emits `serialized_size <= 48_000` after eviction or fails closed to a rule-only assessment with no model call. Assert on the bytes handed to the transport, including prompt scaffolding.
-7. Test both numeric limits independently: a raw provider response exceeding the §7.3 byte cap is rejected before parsing, so an oversized numeric literal is never materialized; and every parsed field, `confidence_percent` included, re-serializes within its bound. Assert no provider text is passed through verbatim.
+7. Test that every parsed field, `confidence_percent` included, re-serializes within its bound, and that no provider text is passed through verbatim. The pre-parse byte cap is the model client's boundary and is tested in Task 20, where the response is actually read.
 8. Test the documented eviction order, that signals are never evicted, that goal text truncates only after all event classes, and that a packet whose signals and goal exceed the budget fails closed to a rule-only assessment.
 9. Test that `truncation` counts are populated on eviction and zeroed on a complete window.
 10. Test that `system_refs` carries every citable non-event fact and that a `sys:` ID absent from the packet is rejected downstream.
@@ -494,10 +495,11 @@
 
 1. Define `assess(model_profile, observation, schema)` interface.
 2. Test OpenAI-compatible structured-output request construction with `respx`, asserting the request carries the wire schema and never the authoritative one.
-3. Test that a response valid under the wire schema but violating an authoritative bound is rejected and takes the retry path.
-4. Test timeout, invalid JSON, schema mismatch, and retry classification.
-5. Ensure no tools are supplied to the assessment model.
-6. Commit: `feat: add structured model assessment client`.
+3. Test the response transport boundary here, where the client actually reads it: stream and count bytes, read no more than `model.max_response_bytes` (default 1 MiB, configurable 64 KiB to 8 MiB), abort as soon as the cap is exceeded, and reject **before** `json.loads` so an oversized numeric literal is never parsed. Assert an aborted response is a transport failure inside the existing retry budget and does not amplify reads beyond the cap.
+4. Test that a response valid under the wire schema but violating an authoritative bound is rejected and takes the retry path.
+5. Test timeout, invalid JSON, schema mismatch, and retry classification.
+6. Ensure no tools are supplied to the assessment model.
+7. Commit: `feat: add structured model assessment client`.
 
 ### Task 21: Implement Luna assessment
 
@@ -536,12 +538,14 @@
 3. Verify advisory mode structurally against `schemas/reconciled_assessment.schema.json`: the reconciler emits `state`, `status`, and `notification_status`; only the first and third are derivable without model output, and no model-narrowed status reaches the notifier. Assert the reconciled result validates and that `assessment.schema.json` alone cannot represent it, so the boundary stays a contract rather than a convention.
 4. Test that a reconciled result with `model_assessment: null` is valid and fully populated, which is the rule-only and budget-exhausted path.
 5. Add negative fixtures for every combination the projection forbids, each asserted invalid against the committed schema: `state=idle` with `status=terminal_failed` or `notification_status=identity_broken`; `state=idle` with a non-provisional report; a terminal state with `run_id=null`; and `report_version=1` with a non-null `supersedes`.
-6. Test the domain invariant JSON Schema cannot express: `supersedes < report_version`, and that a report chain never reuses or decreases a version.
-7. Verify deterministic critical signals force attention despite reassuring model output.
-8. Verify Terra prose supersedes Luna only when valid.
-9. Verify timeout falls back to deterministic assessment.
-10. Verify both epochs: `status_epoch` advances only on a `notification_status` change, `attention_epoch` only on a deterministic `needs_attention` false-to-true transition, and neither is advanced by model output.
-11. Commit: `feat: add terra escalation policy`.
+6. Test the domain invariants JSON Schema cannot express: `supersedes < report_version` with a chain that never reuses or decreases a version, and `signal_fingerprint` equal to the canonical digest of `active_signals`, including that a mismatched digest is rejected.
+7. Add negative fixtures for the relations now encoded in the schema: `notification_status` of `stalled`, `looping`, or `off_scope` with no matching signal kind in `active_signals`; an active critical signal with `needs_attention: false`; `fatal` set without `identity_broken`; and `identity_broken` without `fatal`.
+8. Test the fatal path end to end from a saturated `status_epoch`: the session enters `fatal` out of band, epochs freeze, and the message deduplicates on `session_id + "fatal" + reason` with no epoch in the key.
+9. Verify deterministic critical signals force attention despite reassuring model output.
+10. Verify Terra prose supersedes Luna only when valid.
+11. Verify timeout falls back to deterministic assessment.
+12. Verify both epochs: `status_epoch` advances only on a `notification_status` change, `attention_epoch` only on a deterministic `needs_attention` false-to-true transition, and neither is advanced by model output.
+13. Commit: `feat: add terra escalation policy`.
 
 ### Task 23: Schedule assessments by evidence change
 
@@ -663,7 +667,7 @@
 1. Test safe defaults: loopback bind, Telegram off, AgentLens optional, remote model trust not assumed.
 2. Test invalid threshold/model/endpoint combinations fail at startup.
 3. Document Luna/Terra profile mapping without hard-coding deployment-specific names.
-4. Test the packet character budget, the per-session assessment ceiling, and the daily cost ceiling, including that a breach stops model calls, emits `dependency_unavailable` with reason `budget_exhausted`, and leaves deterministic notification intact.
+4. Test the packet character budget, `model.max_response_bytes` and its 64 KiB to 8 MiB range, the per-session assessment ceiling, and the daily cost ceiling, including that a breach stops model calls, emits `dependency_unavailable` with reason `budget_exhausted`, and leaves deterministic notification intact.
 5. Require explicit consent before first remote transmission and validate HTTPS allowlist, redirect/SSRF policy, proxy handling, response limits, retry budget, and provider retention policy.
 6. Commit: `feat: add safe watchtower configuration`.
 
