@@ -15,7 +15,13 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from codex_watchtower.config import ConfigError, WatchtowerConfig, load_config
+from codex_watchtower.config import (
+    BudgetConfig,
+    ConfigError,
+    ModelEndpointConfig,
+    WatchtowerConfig,
+    load_config,
+)
 
 if TYPE_CHECKING:
     from codex_watchtower.storage.repository import Repository
@@ -252,13 +258,104 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
                     telegram_notifier,
                     config.telegram.chat_id_allowlist,
                 )
+            # Run periodic Luna assessments if configured.
+            if config.luna is not None:
+                await asyncio.to_thread(_run_scheduled_luna, repo, config.luna, config.budget)
             await asyncio.sleep(poll_interval)
 
     await asyncio.gather(server.serve(), ingestion_loop())
 
 
+def _run_scheduled_luna(
+    repo: Repository,
+    luna_config: ModelEndpointConfig,
+    budget: BudgetConfig,
+) -> None:
+    """Run scheduled Luna assessments for sessions that need it.
+
+    Uses the AssessmentScheduler to decide which sessions are due for a
+    Luna assessment based on lifecycle changes, signal changes, and
+    routine cadence (review #2).
+    """
+    import hashlib
+    from datetime import UTC, datetime
+
+    from codex_watchtower import domain as _domain
+    from codex_watchtower.assess.orchestrator import (
+        reconcile_with_assessment,
+        run_luna_assessment,
+    )
+    from codex_watchtower.assess.scheduler import (
+        SchedulerState,
+        should_schedule_assessment,
+    )
+
+    now = datetime.now(UTC)
+    for row in repo.list_sessions():
+        session_id = row["session_id"]
+        # Skip terminal sessions.
+        state_str = row["state"]
+        try:
+            state_enum = _domain.SessionState(state_str)
+        except ValueError:
+            continue
+        if state_enum in (
+            _domain.SessionState.terminal_completed,
+            _domain.SessionState.terminal_failed,
+        ):
+            continue
+
+        active_signals = repo.get_active_signals(session_id)
+        fingerprint = hashlib.sha256(
+            "|".join(sorted(s.id for s in active_signals)).encode()
+        ).hexdigest()
+
+        # Simple scheduler state: check if last assessment was > 10 min ago.
+        # In a full implementation this would be persisted; for now we use
+        # the reconciled assessment's timestamp.
+        reconciled = repo.get_latest_reconciled(session_id)
+        last_assessed_str = reconciled.reconciled_at if reconciled else None
+        if last_assessed_str:
+            try:
+                last_assessed = datetime.fromisoformat(
+                    last_assessed_str[:-1] + "+00:00"
+                    if last_assessed_str.endswith("Z")
+                    else last_assessed_str
+                )
+            except ValueError:
+                last_assessed = None
+        else:
+            last_assessed = None
+
+        sched_state = SchedulerState(
+            last_assessed_at=last_assessed,
+            last_lifecycle_state=state_enum,
+            last_signal_fingerprint=fingerprint,
+        )
+
+        decision = should_schedule_assessment(
+            sched_state,
+            now=now,
+            current_lifecycle_state=state_enum,
+            current_signal_fingerprint=fingerprint,
+            material_progress_marker=False,
+        )
+        if not decision.should_assess:
+            continue
+
+        outcome = run_luna_assessment(repo, session_id, luna_config, budget, now=now)
+        if outcome.assessment is not None or outcome.failure_reason is not None:
+            reconcile_with_assessment(repo, session_id, outcome.assessment, now=now)
+
+
 def _dispatch_notifications(repo: Repository, notifier: object, chat_ids: list[str]) -> None:
-    """Check reconciled sessions and send notifications via Telegram."""
+    """Dispatch Telegram notifications with durable retry state.
+
+    First, resumes any pending deliveries from previous polls (preserving
+    attempt count and backoff). Then checks for new send-worthy sessions
+    and initiates delivery, persisting any transient failures for retry
+    (review #6).
+    """
     from datetime import UTC, datetime
 
     from codex_watchtower.notify.policy import (
@@ -276,6 +373,50 @@ def _dispatch_notifications(repo: Repository, notifier: object, chat_ids: list[s
     if not chat_ids:
         return
     now = datetime.now(UTC)
+    now_iso = now.isoformat()
+
+    tg = notifier if isinstance(notifier, TelegramNotifier) else None
+    if tg is None:
+        return
+
+    # 1. Resume pending deliveries from previous polls.
+    for pd_row in repo.list_due_pending_deliveries(now_iso):
+        pending = PendingDelivery(
+            dedup_key=pd_row["dedup_key"],
+            chat_id=pd_row["chat_id"],
+            text=pd_row["text"],
+            attempt=pd_row["attempt"],
+            next_retry_at=(
+                datetime.fromisoformat(pd_row["next_retry_at"]) if pd_row["next_retry_at"] else None
+            ),
+        )
+        outcome = process_delivery(tg, pending, now=now)
+        if outcome.delivered:
+            repo.delete_pending_delivery(pd_row["dedup_key"])
+            repo.record_delivery(
+                pd_row["dedup_key"],
+                pd_row["session_id"],
+                "unknown",
+                cursor=None,
+                sent_at=now_iso,
+            )
+        elif outcome.gave_up:
+            repo.delete_pending_delivery(pd_row["dedup_key"])
+        elif outcome.pending is not None:
+            repo.upsert_pending_delivery(
+                outcome.pending.dedup_key,
+                pd_row["session_id"],
+                outcome.pending.chat_id,
+                outcome.pending.text,
+                attempt=outcome.pending.attempt,
+                next_retry_at=(
+                    outcome.pending.next_retry_at.isoformat()
+                    if outcome.pending.next_retry_at
+                    else None
+                ),
+            )
+
+    # 2. Check for new send-worthy sessions.
     for row in repo.list_sessions():
         session_id = row["session_id"]
         reconciled = repo.get_latest_reconciled(session_id)
@@ -300,18 +441,29 @@ def _dispatch_notifications(repo: Repository, notifier: object, chat_ids: list[s
         )
         for chat_id in chat_ids:
             pending = PendingDelivery(dedup_key=key, chat_id=chat_id, text=text)
-            outcome = process_delivery(
-                notifier if isinstance(notifier, TelegramNotifier) else None,  # type: ignore[arg-type]
-                pending,
-                now=now,
-            )
+            outcome = process_delivery(tg, pending, now=now)
             if outcome.delivered:
                 repo.record_delivery(
                     key,
                     session_id,
                     reconciled.notification_status.value,
                     cursor=reconciled.event_cursor,
-                    sent_at=now.isoformat(),
+                    sent_at=now_iso,
+                )
+            elif outcome.gave_up:
+                pass  # terminal failure, don't persist
+            elif outcome.pending is not None:
+                repo.upsert_pending_delivery(
+                    outcome.pending.dedup_key,
+                    session_id,
+                    outcome.pending.chat_id,
+                    outcome.pending.text,
+                    attempt=outcome.pending.attempt,
+                    next_retry_at=(
+                        outcome.pending.next_retry_at.isoformat()
+                        if outcome.pending.next_retry_at
+                        else None
+                    ),
                 )
 
 

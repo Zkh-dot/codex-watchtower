@@ -30,9 +30,14 @@ def run_luna(
     *,
     http_client: httpx.Client | None = None,
     prompt: str | None = None,
+    max_request_bytes: int | None = None,
 ) -> LunaResult:
     system_prompt = prompt if prompt is not None else load_luna_prompt()
     result = assess_with_evidence_validation(
-        profile, observation, system_prompt, http_client=http_client
+        profile,
+        observation,
+        system_prompt,
+        http_client=http_client,
+        max_request_bytes=max_request_bytes,
     )
     return LunaResult(assessment=result.assessment, fallback_reason=result.fallback_reason)

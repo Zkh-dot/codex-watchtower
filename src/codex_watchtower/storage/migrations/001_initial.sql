@@ -189,6 +189,25 @@ CREATE TABLE IF NOT EXISTS deliveries (
 CREATE INDEX IF NOT EXISTS idx_deliveries_session
     ON deliveries (session_id);
 
+-- Pending (not-yet-delivered) notification attempts with durable retry state.
+-- When a Telegram send fails transiently, the attempt count, backoff
+-- next_retry_at, and message text are persisted here so the next poll
+-- resumes from the correct retry state instead of starting from attempt 0.
+CREATE TABLE IF NOT EXISTS pending_deliveries (
+    dedup_key TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions (session_id),
+    chat_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    attempt INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TEXT,
+    failed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_deliveries_session
+    ON pending_deliveries (session_id);
+
 CREATE TABLE IF NOT EXISTS model_calls (
     row_id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT REFERENCES sessions (session_id),

@@ -34,8 +34,15 @@ def assess_with_evidence_validation(
     system_prompt: str,
     *,
     http_client: httpx.Client | None = None,
+    max_request_bytes: int | None = None,
 ) -> EvidenceValidatedResult:
-    first = assess(profile, observation, system_prompt, http_client=http_client)
+    first = assess(
+        profile,
+        observation,
+        system_prompt,
+        http_client=http_client,
+        max_request_bytes=max_request_bytes,
+    )
     if first.assessment is None:
         return EvidenceValidatedResult(None, first.failure_reason)
     if not domain.validate_evidence_against_packet(first.assessment, observation):
@@ -44,7 +51,13 @@ def assess_with_evidence_validation(
     # Second attempt with retry_budget=0 to bound total provider attempts
     # to (retry_budget + 1) + 1, not 2 * (retry_budget + 1).
     second_profile = replace(profile, retry_budget=0)
-    second = assess(second_profile, observation, system_prompt, http_client=http_client)
+    second = assess(
+        second_profile,
+        observation,
+        system_prompt,
+        http_client=http_client,
+        max_request_bytes=max_request_bytes,
+    )
     if second.assessment is None:
         return EvidenceValidatedResult(None, second.failure_reason)
     if domain.validate_evidence_against_packet(second.assessment, observation):

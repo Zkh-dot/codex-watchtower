@@ -110,8 +110,10 @@ class IngestionService:
         """Consume unconsumed launcher process evidence into lifecycle.
 
         When a wrapped run exits and has been correlated to a session,
-        bind the execution and create a process_lifecycle event so the
-        lifecycle can transition to terminal_completed/terminal_failed.
+        bind the execution, apply the process exit, create a terminal
+        report, run rules + reconciliation, and mark consumed — all in a
+        single transaction so the evidence is never left half-processed
+        (review #5).
         """
         for evidence in self.repo.list_unconsumed_process_evidence():
             if evidence.session_id is None or evidence.exit_code is None:
@@ -122,24 +124,50 @@ class IngestionService:
             state = _lifecycle_from_row(evidence.session_id, session)
             if state.fatal is not None:
                 continue
-            # Bind the execution if not already bound.
-            run_id = evidence.launch_id
-            if state.run_id != run_id:
-                bound = lifecycle.bind_execution(
-                    state, run_id=run_id, now=now, first_binding=(state.execution_epoch is None)
+
+            with self.repo.transaction():
+                run_id = evidence.launch_id
+                previous_state = state.state
+                if state.run_id != run_id:
+                    state = lifecycle.bind_execution(
+                        state,
+                        run_id=run_id,
+                        now=now,
+                        first_binding=(state.execution_epoch is None),
+                    )
+                exited = lifecycle.on_process_exit(
+                    state,
+                    run_id=run_id,
+                    execution_epoch=state.execution_epoch or 0,
+                    exit_code=evidence.exit_code,
+                    now=now,
                 )
-                _persist_lifecycle(self.repo, bound)
-                state = bound
-            # Apply the process exit.
-            exited = lifecycle.on_process_exit(
-                state,
-                run_id=run_id,
-                execution_epoch=state.execution_epoch or 0,
-                exit_code=evidence.exit_code,
-                now=now,
-            )
-            _persist_lifecycle(self.repo, exited)
-            self.repo.mark_process_evidence_consumed(evidence.launch_id)
+                _persist_lifecycle(self.repo, exited)
+                state = exited
+
+                transition = lifecycle.report_for_terminal_or_idle(
+                    state, previous_state=previous_state
+                )
+                state = transition.state
+                if transition.report is not None:
+                    self.repo.insert_report(
+                        evidence.session_id,
+                        report_version=transition.report.report_version,
+                        run_id=state.run_id,
+                        execution_epoch=state.execution_epoch,
+                        provisional=transition.report.provisional,
+                        supersedes=transition.report.supersedes,
+                        body={
+                            "state": state.state.value,
+                            "elapsed_seconds": None,
+                            "session_id": evidence.session_id,
+                        },
+                    )
+                    _persist_lifecycle(self.repo, state)
+
+                workspace = session["workspace"] if session["workspace"] else ""
+                self._run_rules_and_reconcile(evidence.session_id, workspace, state, now)
+                self.repo.mark_process_evidence_consumed(evidence.launch_id)
 
     def _ingest_session(self, discovered: DiscoveredSession, now: datetime) -> None:
         session_id = discovered.session_id
@@ -180,72 +208,72 @@ class IngestionService:
         # Atomic per-session batch: cursor, events, lifecycle, reports, and
         # reconciliation all commit together. A crash midway leaves no
         # partial state — the cursor is not advanced unless events are
-        # persisted, and vice versa.
-        self.repo.begin_transaction()
+        # persisted, and vice versa. The context manager rolls back on any
+        # exception so the shared connection is never left in an open
+        # transaction (review #4).
+        with self.repo.transaction():
+            new_events: list[domain.Event] = []
+            for raw in read_result.records:
+                normalized = normalize_record(session_id, raw, fallback_timestamp=now.isoformat())
+                if normalized is None:
+                    self.telemetry.event_rejected(session_id, "unmappable_type")
+                    continue
+                if normalized.event.kind == domain.EventKind.unknown:
+                    wire_type = raw.parsed.get("type", "unknown") if raw.parsed else "unknown"
+                    self.telemetry.unknown_event_type(session_id, str(wire_type))
+                locator = SourceLocator(
+                    device=raw.locator.device,
+                    inode=raw.locator.inode,
+                    byte_offset=raw.locator.byte_offset,
+                    record_length=raw.locator.record_length,
+                    source_hash=normalized.payload_hash,
+                )
+                inserted = self.repo.insert_event_if_new(
+                    session_id,
+                    normalized.event.id,
+                    kind=normalized.event.kind.value,
+                    timestamp=normalized.event.timestamp,
+                    summary=normalized.event.summary,
+                    path=normalized.event.path,
+                    exit_code=normalized.event.exit_code,
+                    source_type=normalized.event.source_type,
+                    run_id=normalized.event.run_id,
+                    execution_epoch=normalized.event.execution_epoch,
+                    locator=locator,
+                )
+                if inserted.inserted:
+                    new_events.append(normalized.event)
+                    self.telemetry.event_ingested(session_id)
+                else:
+                    self.telemetry.event_rejected(session_id, "duplicate")
 
-        new_events: list[domain.Event] = []
-        for raw in read_result.records:
-            normalized = normalize_record(session_id, raw, fallback_timestamp=now.isoformat())
-            if normalized is None:
-                self.telemetry.event_rejected(session_id, "unmappable_type")
-                continue
-            if normalized.event.kind == domain.EventKind.unknown:
-                wire_type = raw.parsed.get("type", "unknown") if raw.parsed else "unknown"
-                self.telemetry.unknown_event_type(session_id, str(wire_type))
-            locator = SourceLocator(
-                device=raw.locator.device,
-                inode=raw.locator.inode,
-                byte_offset=raw.locator.byte_offset,
-                record_length=raw.locator.record_length,
-                source_hash=normalized.payload_hash,
-            )
-            inserted = self.repo.insert_event_if_new(
-                session_id,
-                normalized.event.id,
-                kind=normalized.event.kind.value,
-                timestamp=normalized.event.timestamp,
-                summary=normalized.event.summary,
-                path=normalized.event.path,
-                exit_code=normalized.event.exit_code,
-                source_type=normalized.event.source_type,
-                run_id=normalized.event.run_id,
-                execution_epoch=normalized.event.execution_epoch,
-                locator=locator,
-            )
-            if inserted.inserted:
-                new_events.append(normalized.event)
-                self.telemetry.event_ingested(session_id)
-            else:
-                self.telemetry.event_rejected(session_id, "duplicate")
+            previous_state = state.state
+            if new_events:
+                state = lifecycle.on_new_events(state, new_events, now)
+            if state.fatal is None:
+                state = lifecycle.tick(state, now=now, quiet_grace_period=self.quiet_grace_period)
 
-        previous_state = state.state
-        if new_events:
-            state = lifecycle.on_new_events(state, new_events, now)
-        if state.fatal is None:
-            state = lifecycle.tick(state, now=now, quiet_grace_period=self.quiet_grace_period)
+            transition = lifecycle.report_for_terminal_or_idle(state, previous_state=previous_state)
+            state = transition.state
+            if transition.report is not None:
+                self.repo.insert_report(
+                    session_id,
+                    report_version=transition.report.report_version,
+                    run_id=state.run_id,
+                    execution_epoch=state.execution_epoch,
+                    provisional=transition.report.provisional,
+                    supersedes=transition.report.supersedes,
+                    body={
+                        "state": state.state.value,
+                        "elapsed_seconds": None,
+                        "session_id": session_id,
+                    },
+                )
 
-        transition = lifecycle.report_for_terminal_or_idle(state, previous_state=previous_state)
-        state = transition.state
-        if transition.report is not None:
-            self.repo.insert_report(
-                session_id,
-                report_version=transition.report.report_version,
-                run_id=state.run_id,
-                execution_epoch=state.execution_epoch,
-                provisional=transition.report.provisional,
-                supersedes=transition.report.supersedes,
-                body={
-                    "state": state.state.value,
-                    "elapsed_seconds": None,
-                    "session_id": session_id,
-                },
-            )
-
-        # Cursor saved last, atomically with events/lifecycle/reports.
-        self.repo.save_cursor(session_id, read_result.cursor)
-        _persist_lifecycle(self.repo, state)
-        self._run_rules_and_reconcile(session_id, discovered.workspace or "", state, now)
-        self.repo.commit_transaction()
+            # Cursor saved last, atomically with events/lifecycle/reports.
+            self.repo.save_cursor(session_id, read_result.cursor)
+            _persist_lifecycle(self.repo, state)
+            self._run_rules_and_reconcile(session_id, discovered.workspace or "", state, now)
 
     def _run_rules_and_reconcile(
         self, session_id: str, workspace: str, state: lifecycle.LifecycleState, now: datetime

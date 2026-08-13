@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -80,6 +81,21 @@ class Repository:
 
     def commit_transaction(self) -> None:
         self._conn.execute("COMMIT")
+
+    def rollback_transaction(self) -> None:
+        self._conn.execute("ROLLBACK")
+
+    @contextmanager
+    def transaction(self) -> Any:
+        """Context manager: commits on success, rolls back on any exception."""
+        self._conn.execute("BEGIN")
+        try:
+            yield
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+        else:
+            self._conn.execute("COMMIT")
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -623,6 +639,57 @@ class Repository:
             )
             for row in rows
         ]
+
+    # --- pending notification deliveries (durable retry) -------------
+
+    def upsert_pending_delivery(
+        self,
+        dedup_key: str,
+        session_id: str,
+        chat_id: str,
+        text: str,
+        *,
+        attempt: int,
+        next_retry_at: str | None,
+        failed: bool = False,
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO pending_deliveries (
+                dedup_key, session_id, chat_id, text, attempt, next_retry_at, failed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (dedup_key) DO UPDATE SET
+                chat_id = excluded.chat_id,
+                text = excluded.text,
+                attempt = excluded.attempt,
+                next_retry_at = excluded.next_retry_at,
+                failed = excluded.failed,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            """,
+            (
+                dedup_key,
+                session_id,
+                chat_id,
+                text,
+                attempt,
+                next_retry_at,
+                1 if failed else 0,
+            ),
+        )
+
+    def list_due_pending_deliveries(self, now_iso: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM pending_deliveries
+            WHERE failed = 0 AND (next_retry_at IS NULL OR next_retry_at <= ?)
+            ORDER BY created_at ASC
+            """,
+            (now_iso,),
+        )
+        return [dict(row) for row in rows]
+
+    def delete_pending_delivery(self, dedup_key: str) -> None:
+        self._conn.execute("DELETE FROM pending_deliveries WHERE dedup_key = ?", (dedup_key,))
 
     # --- model call observability ------------------------------------
 

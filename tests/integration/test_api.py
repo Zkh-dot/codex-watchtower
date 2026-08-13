@@ -172,7 +172,10 @@ def test_assess_succeeds_with_correct_bearer_token(repo: Repository) -> None:
         "/api/v1/sessions/sess-1/assess", headers={"Authorization": "Bearer secret-token"}
     )
     assert response.status_code == 200
-    assert response.json()["status"] == "accepted"
+    # Without terra_config set on app.state, the endpoint rejects with
+    # terra_not_configured rather than returning a fake "accepted".
+    assert response.json()["status"] == "rejected"
+    assert response.json()["error"] == "terra_not_configured"
 
 
 def test_assess_rejects_wrong_bearer_token(repo: Repository) -> None:

@@ -161,17 +161,60 @@ def post_assess(
 
     in_progress.add(session_id)
     try:
-        # Invoke the Terra model if configured.
         terra_config = getattr(request.app.state, "terra_config", None)
-        result = {
-            "status": "accepted",
-            "session_id": session_id,
-            "request_id": secrets.token_hex(8),
-            "assessment": None,
-        }
-        if terra_config is not None:
-            result["status"] = "completed"
-            result["assessment"] = "terra_invoked"
+        budget = getattr(request.app.state, "budget", None)
+
+        if terra_config is None or budget is None:
+            result: dict[str, Any] = {
+                "status": "rejected",
+                "session_id": session_id,
+                "request_id": secrets.token_hex(8),
+                "error": "terra_not_configured",
+            }
+        else:
+            from codex_watchtower.assess.orchestrator import (
+                reconcile_with_assessment,
+                run_terra_assessment,
+            )
+
+            # Get prior Luna assessment if available.
+            prior_reconciled = repo.get_latest_reconciled(session_id)
+            luna_assessment = prior_reconciled.model_assessment if prior_reconciled else None
+
+            outcome = run_terra_assessment(
+                repo,
+                session_id,
+                terra_config,
+                budget,
+                luna_assessment,
+                escalation_reason="operator_requested",
+            )
+
+            if outcome.budget_exhausted:
+                result = {
+                    "status": "budget_exhausted",
+                    "session_id": session_id,
+                    "request_id": secrets.token_hex(8),
+                    "reason": outcome.failure_reason,
+                }
+            elif outcome.assessment is None:
+                result = {
+                    "status": "failed",
+                    "session_id": session_id,
+                    "request_id": secrets.token_hex(8),
+                    "reason": outcome.failure_reason,
+                }
+            else:
+                # Persist the reconciled result with the Terra assessment.
+                reconcile_with_assessment(repo, session_id, outcome.assessment)
+                result = {
+                    "status": "completed",
+                    "session_id": session_id,
+                    "request_id": secrets.token_hex(8),
+                    "model_call_id": outcome.model_call_id,
+                    "assessment": outcome.assessment.model_dump(mode="json"),
+                }
+
         if idempotency_key is not None:
             cache[idempotency_key] = result
         return result

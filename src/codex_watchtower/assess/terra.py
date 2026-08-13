@@ -40,11 +40,16 @@ def run_terra(
     escalation_reason: str,
     http_client: httpx.Client | None = None,
     prompt: str | None = None,
+    max_request_bytes: int | None = None,
 ) -> TerraResult:
     system_prompt = prompt if prompt is not None else load_terra_prompt()
     packet = observation.model_copy(update={"previous_assessment": luna_assessment})
     result = assess_with_evidence_validation(
-        profile, packet, system_prompt, http_client=http_client
+        profile,
+        packet,
+        system_prompt,
+        http_client=http_client,
+        max_request_bytes=max_request_bytes,
     )
     assessment = result.assessment
     if assessment is not None and assessment.escalation_reason is None:
