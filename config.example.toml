@@ -1,0 +1,55 @@
+# Codex Watchtower example configuration.
+#
+# Copy to config.toml and edit. Every value shown here is either the
+# built-in default or a clearly-marked placeholder; nothing here enables
+# a remote model call, Telegram delivery, or a non-loopback bind on its
+# own -- each of those requires an explicit operator decision below.
+
+sessions_root = "~/.codex/sessions"
+state_dir = "~/.local/state/codex-watchtower"
+
+# Uncomment to accept guarded operator requests at POST /api/v1/sessions/{id}/assess.
+# operator_token = "set-a-long-random-value-here"
+
+[bind]
+host = "127.0.0.1"  # loopback only; widening this is an explicit, documented choice
+port = 8787
+
+[telegram]
+enabled = false
+# bot_token_env_var = "WATCHTOWER_TELEGRAM_BOT_TOKEN"  # the token itself is never stored here
+chat_id_allowlist = []
+
+[agentlens]
+enabled = false
+base_url = "http://127.0.0.1:4316/mcp"
+
+[budget]
+packet_character_budget = 48000
+# per_session_assessment_ceiling = 200
+# daily_cost_ceiling_cents = 500
+
+# Luna and Terra profiles are deployment configuration, not hard-coded
+# protocol constants (spikes/models/README.md): resolve real
+# model_identifier/endpoint values against your own deployment before
+# enabling either. Both default to trust_mode = "local"; moving to
+# "trusted-remote" additionally requires remote_consent_given = true and an
+# HTTPS endpoint outside the loopback/link-local/cloud-metadata ranges.
+#
+# [luna]
+# profile_name = "luna"
+# endpoint = "https://models.example-provider.internal/v1/chat/completions"
+# model_identifier = "REPLACE_WITH_DEPLOYMENT_MODEL_ID"
+# trust_mode = "trusted-remote"
+# api_key_env_var = "WATCHTOWER_LUNA_API_KEY"
+# remote_consent_given = true
+# provider_retention_policy_note = "REPLACE: record the provider's retention/logging policy here"
+#
+# [terra]
+# profile_name = "terra"
+# endpoint = "https://models.example-provider.internal/v1/chat/completions"
+# model_identifier = "REPLACE_WITH_DEPLOYMENT_MODEL_ID"
+# trust_mode = "trusted-remote"
+# api_key_env_var = "WATCHTOWER_TERRA_API_KEY"
+# remote_consent_given = true
+# provider_retention_policy_note = "REPLACE: record the provider's retention/logging policy here"
