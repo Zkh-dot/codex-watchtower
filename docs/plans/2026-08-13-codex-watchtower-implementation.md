@@ -135,7 +135,7 @@
 
 1. Write tests for enum values, assessment confidence bounds, unique evidence references, and schema serialization.
 2. Implement Pydantic models matching the committed JSON Schemas.
-3. Enforce RFC 3339 timestamps, `opened_at <= closed_at`, cursor consistency, unique/monotonic event IDs and timestamps, events inside the window, and assessment references resolving to packet event, signal, or `system_refs` IDs.
+3. Enforce RFC 3339 timestamps, `opened_at <= closed_at`, cursor consistency, unique/monotonic event IDs and timestamps, events inside the window, `used_characters <= budget_characters`, and assessment references resolving to packet event, signal, or `system_refs` IDs.
 4. Test the session-state to assessment-status projection: each state permits only its documented statuses, and a model narrowing within `active_turn` is accepted while a cross-row move is rejected.
 5. Verify serialized fixtures with `jsonschema[format]` and `FormatChecker`.
 6. Commit: `feat: add typed watchtower domain model`.
@@ -454,13 +454,14 @@
 
 1. Test first packet with no prior assessment.
 2. Test subsequent packet starts after the prior cursor.
-3. Test event/item/character limits and the total packet character budget.
-4. Test the documented eviction order, that signals are never evicted, and that a packet whose signals exceed the budget fails closed to a rule-only assessment.
-5. Test that `truncation` counts are populated on eviction and zeroed on a complete window.
-6. Test that `system_refs` carries every citable non-event fact and that a `sys:` ID absent from the packet is rejected downstream.
-7. Test overflow folding and no source-file bodies by default.
-8. Validate generated packets against `observation.schema.json`.
-9. Commit: `feat: build bounded observation packets`.
+3. Test event/item/character limits and the total budget measured on the final serialized provider request, not on the packet alone.
+4. Negative tests for the previously unbounded inputs: a goal at and beyond `maxLength`, a previous assessment at its own maxima, a signal payload at `maxProperties`, and a maximum-sized request whose computed worst case must still fit the budget.
+5. Test the documented eviction order, that signals are never evicted, that goal text truncates only after all event classes, and that a packet whose signals and goal exceed the budget fails closed to a rule-only assessment.
+6. Test that `truncation` counts are populated on eviction and zeroed on a complete window.
+7. Test that `system_refs` carries every citable non-event fact and that a `sys:` ID absent from the packet is rejected downstream.
+8. Test overflow folding and no source-file bodies by default.
+9. Validate generated packets against `observation.schema.json`.
+10. Commit: `feat: build bounded observation packets`.
 
 ## Phase 6: Luna/Terra assessment cascade
 

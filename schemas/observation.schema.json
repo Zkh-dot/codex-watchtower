@@ -25,10 +25,10 @@
       "additionalProperties": false,
       "required": ["text", "acceptance_criteria"],
       "properties": {
-        "text": { "type": "string", "minLength": 1 },
-        "expected_paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-        "forbidden_paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-        "acceptance_criteria": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        "text": { "type": "string", "minLength": 1, "maxLength": 8000 },
+        "expected_paths": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 512 }, "uniqueItems": true },
+        "forbidden_paths": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 512 }, "uniqueItems": true },
+        "acceptance_criteria": { "type": "array", "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 500 } }
       }
     },
     "window": {
@@ -56,11 +56,13 @@
     },
     "signals": {
       "type": "array",
+      "maxItems": 64,
       "items": { "$ref": "#/$defs/signal" }
     },
     "system_refs": {
       "description": "Citable facts that are neither events nor signals. An assessment using ref_type \"system\" must cite an id present here.",
       "type": "array",
+      "maxItems": 32,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -74,7 +76,8 @@
     },
     "redactions": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 },
+      "maxItems": 32,
+      "items": { "type": "string", "minLength": 1, "maxLength": 100 },
       "uniqueItems": true
     },
     "truncation": {
@@ -83,8 +86,8 @@
       "additionalProperties": false,
       "required": ["budget_characters", "used_characters", "evicted"],
       "properties": {
-        "budget_characters": { "type": "integer", "minimum": 1 },
-        "used_characters": { "type": "integer", "minimum": 0 },
+        "budget_characters": { "description": "Total serialized character budget for the whole provider request, including goal and previous_assessment.", "type": "integer", "minimum": 1 },
+        "used_characters": { "description": "Serialized size of the whole provider request. The domain layer enforces used_characters <= budget_characters, which JSON Schema cannot express.", "type": "integer", "minimum": 0 },
         "evicted": {
           "type": "object",
           "additionalProperties": false,
@@ -127,7 +130,15 @@
         "observed_at": { "type": "string", "format": "date-time" },
         "freshness": { "enum": ["current", "stale", "unknown"] },
         "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
-        "payload": { "type": "object", "additionalProperties": true }
+        "payload": {
+          "description": "Bounded scalar map. Nested objects and arrays are rejected so a payload cannot grow without limit; render structure into the summary instead.",
+          "type": "object",
+          "maxProperties": 24,
+          "additionalProperties": {
+            "type": ["string", "number", "integer", "boolean", "null"],
+            "maxLength": 500
+          }
+        }
       }
     }
   }

@@ -162,7 +162,7 @@ The normalizer converts version-specific Codex records into `WatchtowerEvent` va
 
 Turn and process lifecycle are separate kinds, not one `lifecycle` kind. §5.8 and §5.11 depend on the distinction: a turn boundary comes from the transcript and can only produce `between_turns`, while a process boundary comes from outside it and is the only thing that can produce a confirmed terminal state.
 
-Each event has a stable ID, timestamp, short factual summary, source type, and optional path/exit code. It must not ask a model to parse events that can be parsed deterministically. Domain validation additionally enforces RFC 3339 timestamps, unique and monotonic event IDs/times, `opened_at <= closed_at`, cursor consistency, and event timestamps within the declared window; JSON Schema alone cannot express all of these invariants.
+Each event has a stable ID, timestamp, short factual summary, source type, and optional path/exit code. It must not ask a model to parse events that can be parsed deterministically. Domain validation additionally enforces RFC 3339 timestamps, unique and monotonic event IDs/times, `opened_at <= closed_at`, cursor consistency, event timestamps within the declared window, and `used_characters <= budget_characters` measured on the final serialized request; JSON Schema alone cannot express all of these invariants.
 
 ### 5.4 AgentLens adapter
 
@@ -228,20 +228,35 @@ Deterministic signals are structured records with stable ID, kind, severity, sou
 
 Limits:
 
-- a hard total packet budget of 48,000 characters, excluding the goal and previous assessment;
+- a hard budget of 48,000 characters over the **entire serialized provider request**, including the goal, the previous assessment, signals, system refs, and prompt scaffolding;
 - at most 200 normalized events;
 - at most 4,000 characters per event summary;
 - command outputs reduced to relevant head/tail excerpts plus exit status;
 - no full source file contents by default.
 
-The per-event and per-packet caps multiply to roughly 800,000 characters, so the event cap alone bounds nothing useful. The total budget is authoritative and the per-event cap is a secondary guard. When the budget is exceeded, the builder evicts in a fixed order and records what it dropped:
+The budget covers the whole request because every excluded field is attacker- or user-controlled and unbounded in practice. A single pasted goal, a previous assessment at its own maxima, or an unbounded signal payload could each exceed the context and cost limit before eviction began. Every contributing field therefore carries its own cap in the schema, so a maximum-sized request is finite and computable:
+
+| Field | Cap |
+| --- | --- |
+| `goal.text` | 8,000 characters |
+| `goal.acceptance_criteria` | 32 items x 500 characters |
+| `goal.expected_paths`, `goal.forbidden_paths` | 64 items x 512 characters each |
+| `events` | 200 items x 4,000 characters |
+| `signals` | 64 items, summary 1,000 characters, `payload` 24 scalar entries x 500 characters |
+| `system_refs` | 32 items x 1,000 characters |
+| `redactions` | 32 items x 100 characters |
+| `previous_assessment` | bounded by `assessment.schema.json` |
+
+`signal.payload` is a bounded scalar map rather than a free-form object; nested structure is rendered into the summary instead. `used_characters` is measured on the final serialized request, not on the packet in isolation, and `used_characters <= budget_characters` is a domain invariant enforced in §5.3 validation, since JSON Schema cannot express a cross-field comparison.
+
+The per-event and per-packet caps multiply to roughly 800,000 characters, so the event cap alone bounds nothing useful. The total budget is authoritative and the per-field caps are secondary guards. When the budget is exceeded, the builder evicts in a fixed order and records what it dropped:
 
 1. `file_read` events, collapsed into a count and a path set;
 2. `reasoning` events, oldest first;
 3. command output excerpts, tightened toward exit status only;
 4. remaining events oldest first, folded into counters attributed to the previous assessment.
 
-Signals are never evicted; a packet that cannot fit its signals within the budget fails closed to a rule-only assessment. The packet records eviction counts per class so an assessment can state that its window was truncated, and so the model is never silently asked to reason from a partial window it believes is complete.
+Goal text is truncated only as a last resort, after every event class has been evicted, and truncation is recorded. Signals are never evicted; a packet that cannot fit its signals and goal within the budget fails closed to a rule-only assessment. The packet records eviction counts per class so an assessment can state that its window was truncated, and so the model is never silently asked to reason from a partial window it believes is complete.
 
 Model spend is bounded independently of packet size. Configuration sets a per-session and a daily ceiling for assessment calls and estimated cost; on breach Watchtower stops invoking Luna and Terra, continues deterministic monitoring, and reports a `dependency_unavailable` signal with reason `budget_exhausted`. Deterministic critical signals still notify.
 
