@@ -214,6 +214,13 @@ class Repository:
         ).fetchone()
         return row
 
+    def get_all_reports(self, session_id: str) -> list[sqlite3.Row]:
+        rows = self._conn.execute(
+            "SELECT * FROM reports WHERE session_id = ? ORDER BY report_version ASC",
+            (session_id,),
+        ).fetchall()
+        return list(rows)
+
     # --- tailer cursor (internal; never leaves the process) ---------
 
     def get_cursor(self, session_id: str) -> CursorState | None:

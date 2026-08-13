@@ -1,0 +1,36 @@
+{
+  "description": "Two-hour accelerated replay: idle timeout, provisional report, reopen, resume, restart-safety, notification dedup",
+  "accelerated": true,
+  "wall_clock_minutes": 2,
+  "simulated_hours": 2,
+  "grace_period_minutes": 10,
+  "sessions": [
+    {
+      "session_id": "replay-idle-reopen",
+      "scenario": "idle-reopen",
+      "steps": [
+        {"t": "00:00", "action": "session_meta"},
+        {"t": "00:01", "action": "turn_started"},
+        {"t": "00:02", "action": "agent_message", "text": "Starting work"},
+        {"t": "00:15", "action": "idle_timeout", "expected_state": "idle", "expected_report_version": 1, "expected_provisional": true},
+        {"t": "00:20", "action": "turn_started", "expected_state": "active_turn", "expected_reopen": true},
+        {"t": "00:21", "action": "agent_message", "text": "Resuming after idle"},
+        {"t": "00:35", "action": "idle_timeout", "expected_state": "idle", "expected_report_version": 2, "expected_provisional": true, "expected_supersedes": 1}
+      ]
+    },
+    {
+      "session_id": "replay-resume",
+      "scenario": "resume",
+      "steps": [
+        {"t": "00:00", "action": "session_meta"},
+        {"t": "00:01", "action": "turn_started"},
+        {"t": "00:02", "action": "agent_message", "text": "Working on task"},
+        {"t": "00:10", "action": "process_exit", "exit_code": 0, "run_id": "run-1", "execution_epoch": 0},
+        {"t": "00:21", "action": "grace_expires", "expected_state": "terminal_completed", "expected_report_version": 1, "expected_provisional": false},
+        {"t": "00:25", "action": "resume", "run_id": "run-2", "expected_state": "active_turn", "expected_execution_epoch": 1, "expected_report_version": 2, "expected_supersedes": 1},
+        {"t": "00:26", "action": "turn_started"},
+        {"t": "00:27", "action": "agent_message", "text": "Resumed session work"}
+      ]
+    }
+  ]
+}
