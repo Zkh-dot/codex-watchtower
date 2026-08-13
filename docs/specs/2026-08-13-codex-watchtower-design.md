@@ -73,7 +73,7 @@ Watchtower does not concatenate complete AgentLens and Codex Trace outputs. Both
                   |                                    |
                   v                                    v
           Session discovery <-------------- process evidence store
-                  |                          (PID, exit code, exit time)
+                  |                     (session binding, exit code, exit time)
                   v
           Incremental parser ------> raw-event cursor/state
                   |
