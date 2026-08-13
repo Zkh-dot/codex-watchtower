@@ -447,10 +447,12 @@
 
 1. Test first packet with no prior assessment.
 2. Test subsequent packet starts after the prior cursor.
-3. Test event/item/character limits.
-4. Test overflow folding and no source-file bodies by default.
-5. Validate generated packets against `observation.schema.json`.
-6. Commit: `feat: build bounded observation packets`.
+3. Test event/item/character limits and the total packet character budget.
+4. Test the documented eviction order, that signals are never evicted, and that a packet whose signals exceed the budget fails closed to a rule-only assessment.
+5. Test that `truncation` counts are populated on eviction and zeroed on a complete window.
+6. Test overflow folding and no source-file bodies by default.
+7. Validate generated packets against `observation.schema.json`.
+8. Commit: `feat: build bounded observation packets`.
 
 ## Phase 6: Luna/Terra assessment cascade
 
@@ -626,8 +628,9 @@
 1. Test safe defaults: loopback bind, Telegram off, AgentLens optional, remote model trust not assumed.
 2. Test invalid threshold/model/endpoint combinations fail at startup.
 3. Document Luna/Terra profile mapping without hard-coding deployment-specific names.
-4. Require explicit consent before first remote transmission and validate HTTPS allowlist, redirect/SSRF policy, proxy handling, response limits, retry budget, and provider retention policy.
-5. Commit: `feat: add safe watchtower configuration`.
+4. Test the packet character budget, the per-session assessment ceiling, and the daily cost ceiling, including that a breach stops model calls, emits `dependency_unavailable` with reason `budget_exhausted`, and leaves deterministic notification intact.
+5. Require explicit consent before first remote transmission and validate HTTPS allowlist, redirect/SSRF policy, proxy handling, response limits, retry budget, and provider retention policy.
+6. Commit: `feat: add safe watchtower configuration`.
 
 ### Task 29: Add service CLI and systemd unit
 

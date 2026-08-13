@@ -4,7 +4,7 @@
   "title": "WatchtowerObservation",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "session", "goal", "window", "previous_assessment", "events", "signals", "redactions"],
+  "required": ["schema_version", "session", "goal", "window", "previous_assessment", "events", "signals", "redactions", "truncation"],
   "properties": {
     "schema_version": { "const": "1.0" },
     "session": {
@@ -61,6 +61,27 @@
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
       "uniqueItems": true
+    },
+    "truncation": {
+      "description": "Budget accounting for this packet. Present even when nothing was evicted, so an assessor can always tell a complete window from a truncated one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["budget_characters", "used_characters", "evicted"],
+      "properties": {
+        "budget_characters": { "type": "integer", "minimum": 1 },
+        "used_characters": { "type": "integer", "minimum": 0 },
+        "evicted": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file_read", "reasoning", "command_output", "events"],
+          "properties": {
+            "file_read": { "type": "integer", "minimum": 0 },
+            "reasoning": { "type": "integer", "minimum": 0 },
+            "command_output": { "type": "integer", "minimum": 0 },
+            "events": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
     }
   },
   "$defs": {

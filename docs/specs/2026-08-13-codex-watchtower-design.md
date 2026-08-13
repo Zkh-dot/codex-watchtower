@@ -215,11 +215,22 @@ Deterministic signals are structured records with stable ID, kind, severity, sou
 
 Limits:
 
+- a hard total packet budget of 48,000 characters, excluding the goal and previous assessment;
 - at most 200 normalized events;
 - at most 4,000 characters per event summary;
 - command outputs reduced to relevant head/tail excerpts plus exit status;
-- older events folded into the previous assessment and counters;
 - no full source file contents by default.
+
+The per-event and per-packet caps multiply to roughly 800,000 characters, so the event cap alone bounds nothing useful. The total budget is authoritative and the per-event cap is a secondary guard. When the budget is exceeded, the builder evicts in a fixed order and records what it dropped:
+
+1. `file_read` events, collapsed into a count and a path set;
+2. `reasoning` events, oldest first;
+3. command output excerpts, tightened toward exit status only;
+4. remaining events oldest first, folded into counters attributed to the previous assessment.
+
+Signals are never evicted; a packet that cannot fit its signals within the budget fails closed to a rule-only assessment. The packet records eviction counts per class so an assessment can state that its window was truncated, and so the model is never silently asked to reason from a partial window it believes is complete.
+
+Model spend is bounded independently of packet size. Configuration sets a per-session and a daily ceiling for assessment calls and estimated cost; on breach Watchtower stops invoking Luna and Terra, continues deterministic monitoring, and reports a `dependency_unavailable` signal with reason `budget_exhausted`. Deterministic critical signals still notify.
 
 ### 5.7 Model assessors
 
