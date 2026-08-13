@@ -1,16 +1,68 @@
 # Codex Watchtower Implementation Plan
 
-> **For Hermes:** Use the `subagent-driven-development` skill to implement this plan task by task, with specification review before code-quality review.
+**Goal:** Build a local-first monitor that never mutates Codex or its workspace, explains autonomous Codex CLI progress, detects unhealthy behavior, and escalates ambiguous cases from Luna to Terra.
 
-**Goal:** Build a local-first, read-only monitor that explains autonomous Codex CLI progress, detects unhealthy behavior, and escalates ambiguous cases from Luna to Terra.
-
-**Architecture:** A Python service tails persisted Codex rollout JSONL incrementally, normalizes events, enriches them through optional AgentLens MCP, applies deterministic rules, and sends bounded observation packets to structured-output model assessors. SQLite persists cursors and assessments; a local HTTP/SSE API and optional Telegram notifier expose only reconciled, evidence-backed state.
+**Architecture:** A Python service tails persisted Codex rollout JSONL incrementally, normalizes and redacts events before persistence, optionally consumes only version-verified AgentLens fields, applies deterministic rules, and sends bounded observation packets to structured-output model assessors. SQLite persists cursors and redacted assessments; a local HTTP/SSE API and optional Telegram notifier expose reconciled, evidence-backed state without mutating Codex or the workspace.
 
 **Tech stack:** Python 3.12, `uv`, Pydantic v2, SQLite/WAL, FastAPI, `watchfiles`, `httpx`, `mcp`, `jsonschema`, `pytest`, `pytest-asyncio`, `respx`, Ruff, mypy.
 
 **Implementation rule:** Every code task follows red-green-refactor. Commits below are suggested logical checkpoints; merge small adjacent steps when the diff would otherwise be noise.
 
 ---
+
+## Phase -1: Contract spikes before interface freeze
+
+### Task 0A: Freeze actual Codex lifecycle and process evidence
+
+**Objective:** Prove the distinction between turn completion and terminal session completion before defining domain enums.
+
+**Files:**
+
+- Create: `spikes/codex-lifecycle/README.md`
+- Create: `tests/fixtures/codex/lifecycle/`
+
+**Steps:**
+
+1. Capture redacted fixtures with multiple `TurnStarted`/`TurnComplete` pairs in one rollout.
+2. Record launcher PID/exit behavior for `codex exec --json` and persisted interactive sessions.
+3. Define terminal completion as process exit plus quiet grace period, or explicit launcher marker; never map wire `task_complete` directly to terminal completion.
+4. Commit: `spike: verify codex lifecycle semantics`.
+
+### Task 0B: Freeze AgentLens and Codex Trace compatibility contracts
+
+**Objective:** Prevent speculative third-party interfaces from shaping the core domain.
+
+**Files:**
+
+- Create: `spikes/agentlens/README.md`
+- Create: `spikes/agentlens/fixtures/`
+- Create: `spikes/codex-trace/README.md`
+- Create: `spikes/codex-trace/fixtures/`
+
+**Steps:**
+
+1. Pin AgentLens and record exact `get_recent_sessions`, `get_session_detail`, and `get_efficiency_report` input/output fixtures from `http://127.0.0.1:4316/mcp`.
+2. Prove canonical Codex correlation or declare AgentLens enrichment disabled for that version; do not guess from minute-level dates.
+3. Pin Codex Trace and record `GET /api/settings`, `POST /api/sessions`, and `POST /api/session/load` request/response fixtures.
+4. Confirm that only API base plus session ID is stable; do not promise a clickable deep link without a verified URL contract.
+5. Commit: `spike: freeze optional integration contracts`.
+
+### Task 0C: Verify Luna/Terra provider and remote transport
+
+**Objective:** Prove model identifiers, structured output, endpoint trust, and cost behavior before assessor implementation.
+
+**Files:**
+
+- Create: `spikes/models/README.md`
+- Create: `spikes/models/redacted-results.json`
+
+**Steps:**
+
+1. Resolve deployment-specific Luna/Terra identifiers and structured-output support.
+2. Smoke one schema-valid request per profile after explicit operator approval.
+3. Verify HTTPS certificate validation, redirect rejection, endpoint allowlisting, disabled proxy inheritance, response-size cap, retry budget, and provider retention/logging policy.
+4. Record latency and cost without storing prompts or credentials.
+5. Commit: `spike: verify assessment model contracts`.
 
 ## Phase 0: Repository and quality gates
 
@@ -78,10 +130,11 @@
 
 **Steps:**
 
-1. Write failing tests for enum values, assessment confidence bounds, unique event IDs, and schema serialization.
+1. Write tests for enum values, assessment confidence bounds, unique evidence references, and schema serialization.
 2. Implement Pydantic models matching the committed JSON Schemas.
-3. Verify serialized fixtures validate with `jsonschema`.
-4. Commit: `feat: add typed watchtower domain model`.
+3. Enforce RFC 3339 timestamps, `opened_at <= closed_at`, cursor consistency, unique/monotonic event IDs and timestamps, events inside the window, and assessment references resolving to packet event/signal/system IDs.
+4. Verify serialized fixtures with `jsonschema[format]` and `FormatChecker`.
+5. Commit: `feat: add typed watchtower domain model`.
 
 ### Task 4: Create SQLite migrations and repository interface
 
@@ -97,7 +150,7 @@
 **Steps:**
 
 1. Write tests for migration idempotence and WAL mode.
-2. Test atomic insertion of an event and cursor update.
+2. Test atomic insertion of an already-redacted event and cursor update; raw rollout payloads must never enter SQLite.
 3. Test event deduplication by stable event ID.
 4. Test latest-assessment and pending-delivery queries.
 5. Implement the minimal repository using the standard `sqlite3` module and explicit transactions.
@@ -135,7 +188,7 @@
 **Steps:**
 
 1. Write tests for nested `YYYY/MM/DD` discovery, ordering, ignored files, and missing roots.
-2. Parse `session_meta` to obtain ID, workspace, model, origin, and start time.
+2. Parse `session_meta` to obtain ID, workspace, model, origin, and start time; separately capture launcher PID/exit evidence when available.
 3. Preserve a session with missing optional metadata as `unknown`, not as a parser failure.
 4. Commit: `feat: discover persisted codex sessions`.
 
@@ -153,10 +206,11 @@
 1. Test an append with a partial final line: no event and no cursor advance beyond the last newline.
 2. Complete the line and assert exactly one event appears.
 3. Test restart from a stored byte cursor.
-4. Test inode replacement and truncation.
-5. Test duplicate suppression using the last event hash.
-6. Implement the cursor `<device>:<inode>:<offset>:<hash>`.
-7. Commit: `feat: tail codex rollouts incrementally`.
+4. Test inode replacement, truncation, inode reuse, copy-truncate, fast regrowth beyond the old offset, prefix mismatch, and migration between devices.
+5. On mismatch, replay from the last verified newline checkpoint or file start and deduplicate by stable event ID.
+6. Reject symlinks escaping the root, non-regular files, wrong-owner files, FIFO/devices, and configured oversize limits; verify identity again after open.
+7. Implement the cursor `<device>:<inode>:<offset>:<checkpoint-hash>`.
+8. Commit: `feat: tail codex rollouts incrementally`.
 
 ### Task 8: Normalize known and unknown Codex events
 
@@ -173,13 +227,13 @@
 1. Add fixtures for session lifecycle, messages, commands, command output, patches, token updates, errors, and unknown event types.
 2. Write expected normalized snapshots.
 3. Implement stable event ID generation from session ID, source offset, type, and payload hash.
-4. Bound command output and retain content hash/byte length.
+4. Redact before persistence, bound command output, and retain only redacted summary plus source hash/original byte length.
 5. Ensure unknown events become `kind=unknown` with source type preserved.
 6. Commit: `feat: normalize codex rollout events`.
 
 ### Task 9: Classify lifecycle without model inference
 
-**Objective:** Derive running, waiting, completed, and failed states from explicit evidence.
+**Objective:** Distinguish active turns, between-turn pauses, waiting, and terminal process outcomes from explicit evidence.
 
 **Files:**
 
@@ -188,10 +242,12 @@
 
 **Steps:**
 
-1. Test explicit task start/complete/failure sequences.
-2. Test a live file with no terminal lifecycle record as running or unknown according to process evidence.
-3. Test that prose such as “done” does not mark completion.
-4. Commit: `feat: derive codex lifecycle from explicit events`.
+1. Test multiple turn start/complete sequences remain `between_turns`, not terminally completed.
+2. Test terminal completion from launcher/process exit plus quiet grace period.
+3. Test terminal failure from non-zero exit and explicit process evidence.
+4. Test a live file with no process evidence remains active/between-turns/unknown.
+5. Test that prose such as “done” does not mark completion.
+6. Commit: `feat: derive codex lifecycle from explicit events`.
 
 ### Task 10: Add filesystem watcher orchestration
 
@@ -212,9 +268,9 @@
 
 ## Phase 3: AgentLens enrichment
 
-### Task 11: Implement AgentLens MCP client boundary
+### Task 11: Implement version-gated AgentLens compatibility boundary
 
-**Objective:** Query AgentLens through its public MCP tools without coupling core logic to its UI or database.
+**Objective:** Query only fields proven by Task 0B fixtures without coupling core logic to AgentLens UI or speculative general-schema fields.
 
 **Files:**
 
@@ -224,12 +280,13 @@
 
 **Steps:**
 
-1. Mock Streamable HTTP MCP responses for `get_recent_sessions` and `get_session_detail`.
+1. Replay the exact Streamable HTTP MCP fixtures captured in Task 0B for `get_recent_sessions` and `get_session_detail`.
 2. Test timeout, malformed response, unavailable server, and successful parsing.
-3. Implement bounded retries and typed degraded status.
-4. Commit: `feat: add optional agentlens mcp adapter`.
+3. Reject unknown AgentLens versions/response shapes with typed degraded status.
+4. Expose only fields demonstrated by fixtures; do not synthesize loop/file/tool data absent from the Codex adapter.
+5. Commit: `feat: add optional agentlens mcp adapter`.
 
-### Task 12: Correlate AgentLens and Codex sessions
+### Task 12: Correlate AgentLens and Codex sessions only with canonical evidence
 
 **Objective:** Enrich the correct session without creating duplicates or cross-project contamination.
 
@@ -240,13 +297,13 @@
 
 **Steps:**
 
-1. Test exact session-ID match.
-2. Test workspace/start-time/model fallback correlation.
-3. Test ambiguity returning no match instead of guessing.
-4. Record correlation confidence and method.
+1. Test canonical rollout path/session metadata added upstream or proven by the version-pinned local adapter.
+2. Test the current filename-vs-session-meta mismatch explicitly.
+3. Test absent canonical evidence and ambiguity returning no match instead of guessing.
+4. Record correlation method and compatibility version; never use minute-level date/model heuristics.
 5. Commit: `feat: correlate codex and agentlens sessions safely`.
 
-### Task 13: Add explicit SQLite fallback
+### Task 13: Add explicit, schema-pinned SQLite fallback only if Task 0B proves it
 
 **Objective:** Permit read-only AgentLens database snapshots only when configured.
 
@@ -261,7 +318,8 @@
 2. Open it read-only and assert no WAL/schema mutation.
 3. Map only documented fields used by Watchtower.
 4. Reject unknown schema versions with degraded status rather than best-effort guessing.
-5. Commit: `feat: add guarded agentlens sqlite fallback`.
+5. If canonical correlation cannot be proven, omit this task and keep AgentLens disabled for the pinned version.
+6. Commit: `feat: add guarded agentlens sqlite fallback`.
 
 ## Phase 4: Deterministic health signals
 
@@ -449,7 +507,7 @@
 
 ## Phase 7: Local API and Codex Trace integration
 
-### Task 24: Expose read-only HTTP and SSE API
+### Task 24: Expose read-only status API and guarded operator assessment action
 
 **Objective:** Provide machine-readable current state without exposing Codex mutation.
 
@@ -465,10 +523,11 @@
 2. Implement pagination/cursors and JSON schema-compatible responses.
 3. Implement SSE state transitions with reconnect cursor support.
 4. Assert the default bind is `127.0.0.1`.
-5. Assert no endpoint can submit input or mutate Codex.
-6. Commit: `feat: expose local watchtower status api`.
+5. Disable POST assessment unless an operator token is configured; test bearer auth, strict Origin/Host checks, no wildcard CORS, idempotency, rate/cost budgets, and concurrency limits.
+6. Assert no endpoint can submit input or mutate Codex/workspace; document that assessment POST mutates Watchtower state and consumes quota.
+7. Commit: `feat: expose local watchtower status api`.
 
-### Task 25: Add optional Codex Trace adapter and deep links
+### Task 25: Add optional Codex Trace adapter and manual drill-down identifiers
 
 **Objective:** Detect Codex Trace and attach a drill-down target without making it required.
 
@@ -479,11 +538,12 @@
 
 **Steps:**
 
-1. Mock `/api/settings`, `/api/sessions`, and `/api/session/load`.
+1. Mock `GET /api/settings`, `POST /api/sessions`, and `POST /api/session/load` with Task 0B fixtures.
 2. Test unavailable and incompatible responses degrade cleanly.
 3. Verify session correlation by path/session ID.
 4. Keep deep-link generation disabled until a stable URL contract is verified; expose API base and session ID meanwhile.
-5. Commit: `feat: integrate optional codex trace drill-down`.
+5. Treat Codex Trace as an unauthenticated loopback service with permissive CORS: never proxy it externally or widen its bind.
+6. Commit: `feat: integrate optional codex trace drill-down`.
 
 ## Phase 8: Telegram delivery
 
@@ -500,11 +560,12 @@
 
 **Steps:**
 
-1. Add golden messages for warning, waiting, failed, and completed states.
+1. Add golden messages for warning, waiting, terminal failure, and terminal completion states.
 2. Test transition policy and concern fingerprinting.
 3. Test changed prose with identical evidence is suppressed.
 4. Test critical evidence always includes a factual reason and event cursor.
-5. Commit: `feat: render deduplicated operator notifications`.
+5. Apply trusted-remote redaction, path minimization, Telegram markup escaping, `chat_id` allowlisting, and omission of prompts/output/local links.
+6. Commit: `feat: render deduplicated operator notifications`.
 
 ### Task 27: Add Telegram Bot API notifier
 
@@ -541,7 +602,8 @@
 1. Test safe defaults: loopback bind, Telegram off, AgentLens optional, remote model trust not assumed.
 2. Test invalid threshold/model/endpoint combinations fail at startup.
 3. Document Luna/Terra profile mapping without hard-coding deployment-specific names.
-4. Commit: `feat: add safe watchtower configuration`.
+4. Require explicit consent before first remote transmission and validate HTTPS allowlist, redirect/SSRF policy, proxy handling, response limits, retry budget, and provider retention policy.
+5. Commit: `feat: add safe watchtower configuration`.
 
 ### Task 29: Add service CLI and systemd unit
 
@@ -597,7 +659,9 @@
 2. Test stripping source bodies, tokens, and command secrets.
 3. Preserve event order, exit codes, test counts, and hashes required for behavior analysis.
 4. Require an explicit output path and refuse overwrite by default.
-5. Commit: `tools: add safe rollout fixture redaction`.
+5. Emit provenance metadata: source owner, repository visibility/classification, collection authority, license/usage basis, reviewer, and deletion contact.
+6. Refuse private/third-party repository material unless written inclusion authority is recorded; document history-rewrite and credential-rotation procedure for a leaked fixture.
+7. Commit: `tools: add safe rollout fixture redaction`.
 
 ### Task 32: Create the frozen labeled evaluation set
 
@@ -615,9 +679,10 @@
 1. Smoke first with five sessions and manually inspect every redaction.
 2. Obtain operator approval before processing the remaining sessions if model calls are paid or long-running.
 3. Expand to at least 30 sessions across all specified outcome classes.
-4. Add human labels with evidence event IDs.
-5. Freeze the manifest with fixture SHA-256 hashes.
-6. Commit: `eval: add frozen watchtower assessment corpus`.
+4. Add human labels with evidence event IDs and reviewer sign-off.
+5. Define class-distribution targets before collection; record provenance/license metadata for every session.
+6. Freeze the manifest with fixture SHA-256 hashes.
+7. Commit: `eval: add frozen watchtower assessment corpus`.
 
 ### Task 33: Implement Luna/Terra evaluation harness
 
@@ -672,7 +737,7 @@
 **Steps:**
 
 1. Run with AgentLens and Codex Trace absent.
-2. Start AgentLens midway and verify enrichment without duplicate session creation.
+2. Start a fixture-compatible AgentLens midway and verify only canonical enrichment without duplicate session creation; otherwise verify it remains disabled and degraded.
 3. Stop model endpoints and verify rule-only alerts.
 4. Stop Telegram endpoint and verify durable retry.
 5. Commit: `test: verify degraded watchtower operation`.

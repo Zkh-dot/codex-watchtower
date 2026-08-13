@@ -4,8 +4,8 @@ A design and implementation plan for a local-first observer of autonomous OpenAI
 
 Watchtower combines:
 
-- **Codex Trace** for a readable, live view of Codex session events;
-- **AgentLens** for deterministic loop, error, efficiency, and scope signals;
+- **Codex Trace** as an optional, manually correlated live drill-down;
+- **AgentLens** as an optional, version-gated source of the limited metrics its Codex adapter actually exposes;
 - a small **Luna** model for incremental human-readable summaries;
 - a stronger **Terra** model only when evidence is ambiguous or unhealthy;
 - optional Telegram delivery when state changes or human attention is required.
@@ -22,7 +22,7 @@ The project is documentation-first. No runtime implementation has been committed
 
 ## Design principles
 
-1. **Read-only observation.** Watchtower never edits the workspace or silently steers Codex.
+1. **No Codex/workspace mutation.** Watchtower never edits the workspace or silently steers Codex; authenticated operator actions may trigger an assessment and consume model quota.
 2. **Evidence before prose.** Deterministic signals remain authoritative; an LLM explains them but does not invent alerts.
 3. **Incremental context.** Models receive the goal, previous assessment, and only events since the last cursor.
 4. **Local first.** Session transcripts and source code stay local unless an explicitly configured model endpoint receives a redacted observation packet.
@@ -35,12 +35,12 @@ The first usable version will:
 
 - discover active `~/.codex/sessions/**/rollout-*.jsonl` sessions;
 - normalize new Codex events;
-- query AgentLens for current session signals when available;
+- query only verified AgentLens Codex fields when a compatible adapter is available;
 - produce a Luna summary every 10 minutes or on significant change;
 - escalate suspicious or low-confidence cases to Terra;
 - expose a local JSON/HTTP status endpoint;
 - optionally send Telegram notifications;
-- leave Codex Trace as the detailed human drill-down UI.
+- expose a Codex Trace API base and session identifier for manual drill-down when available.
 
 ## Non-goals for MVP
 
@@ -52,7 +52,7 @@ The first usable version will:
 
 ## Status
 
-Specification and execution plan ready. Implementation has not started.
+Draft architecture and execution plan pending integration spikes and implementation validation. No runtime implementation has started.
 
 ## License
 

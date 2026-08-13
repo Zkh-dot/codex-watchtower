@@ -4,7 +4,7 @@
   "title": "WatchtowerObservation",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "session", "goal", "window", "events", "signals"],
+  "required": ["schema_version", "session", "goal", "window", "previous_assessment", "events", "signals", "redactions"],
   "properties": {
     "schema_version": { "const": "1.0" },
     "session": {
@@ -16,19 +16,19 @@
         "workspace": { "type": "string" },
         "started_at": { "type": "string", "format": "date-time" },
         "elapsed_seconds": { "type": "integer", "minimum": 0 },
-        "state": { "enum": ["running", "waiting", "completed", "failed", "unknown"] },
+        "state": { "enum": ["active_turn", "between_turns", "waiting", "terminal_completed", "terminal_failed", "unknown"] },
         "model": { "type": ["string", "null"] }
       }
     },
     "goal": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["text"],
+      "required": ["text", "acceptance_criteria"],
       "properties": {
         "text": { "type": "string", "minLength": 1 },
         "expected_paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
         "forbidden_paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-        "acceptance_criteria": { "type": "array", "items": { "type": "string" } }
+        "acceptance_criteria": { "type": "array", "items": { "type": "string", "minLength": 1 } }
       }
     },
     "window": {
@@ -37,48 +37,62 @@
       "required": ["from_cursor", "to_cursor", "opened_at", "closed_at"],
       "properties": {
         "from_cursor": { "type": ["string", "null"] },
-        "to_cursor": { "type": "string" },
+        "to_cursor": { "type": "string", "minLength": 1 },
         "opened_at": { "type": "string", "format": "date-time" },
         "closed_at": { "type": "string", "format": "date-time" }
       }
     },
-    "previous_assessment": { "$ref": "assessment.schema.json" },
+    "previous_assessment": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "assessment.schema.json" }
+      ]
+    },
     "events": {
       "type": "array",
       "maxItems": 200,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "timestamp", "kind", "summary"],
-        "properties": {
-          "id": { "type": "string" },
-          "timestamp": { "type": "string", "format": "date-time" },
-          "kind": { "enum": ["message", "reasoning", "command", "command_result", "file_read", "file_changed", "test_result", "error", "lifecycle", "unknown"] },
-          "summary": { "type": "string", "maxLength": 4000 },
-          "path": { "type": ["string", "null"] },
-          "exit_code": { "type": ["integer", "null"] },
-          "source_type": { "type": ["string", "null"] }
-        }
-      }
+      "items": { "$ref": "#/$defs/event" }
     },
     "signals": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["loop_signals", "errors", "changed_files", "unexpected_paths", "progress_markers"],
-      "properties": {
-        "loop_signals": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-        "errors": { "type": "integer", "minimum": 0 },
-        "changed_files": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-        "unexpected_paths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-        "progress_markers": { "type": "array", "items": { "type": "string" } },
-        "minutes_without_progress": { "type": "number", "minimum": 0 },
-        "context_growth": { "enum": ["normal", "elevated", "critical", "unknown"] },
-        "test_trend": { "enum": ["improving", "stable", "worsening", "unknown"] }
-      }
+      "type": "array",
+      "items": { "$ref": "#/$defs/signal" }
     },
     "redactions": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "timestamp", "kind", "summary"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "kind": { "enum": ["message", "reasoning", "command", "command_result", "file_read", "file_changed", "test_result", "error", "turn_lifecycle", "process_lifecycle", "unknown"] },
+        "summary": { "type": "string", "maxLength": 4000 },
+        "path": { "type": ["string", "null"] },
+        "exit_code": { "type": ["integer", "null"] },
+        "source_type": { "type": ["string", "null"] }
+      }
+    },
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "severity", "source", "event_ids", "observed_at", "freshness", "summary", "payload"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["repeated_command", "recurring_error", "stagnation", "scope_expansion", "forbidden_path", "waiting", "turn_failed", "process_failed", "test_regression", "context_growth", "agentlens_finding", "dependency_unavailable", "other"] },
+        "severity": { "enum": ["info", "warning", "critical"] },
+        "source": { "enum": ["local_rule", "agentlens", "system"] },
+        "event_ids": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "freshness": { "enum": ["current", "stale", "unknown"] },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "payload": { "type": "object", "additionalProperties": true }
+      }
     }
   }
 }

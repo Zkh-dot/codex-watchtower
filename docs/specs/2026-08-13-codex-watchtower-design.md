@@ -1,7 +1,7 @@
 # Codex Watchtower Architecture Specification
 
 **Date:** 2026-08-13  
-**Status:** Approved design, implementation not started  
+**Status:** Draft architecture pending integration spikes, implementation not started
 **Repository:** `ya-yara/codex-watchtower`
 
 ## 1. Problem
@@ -24,7 +24,7 @@ Watchtower shall:
 - observe local Codex CLI sessions without modifying them;
 - retain the original user goal and optional expected/forbidden path boundaries;
 - ingest incremental Codex events with a durable cursor;
-- merge AgentLens-derived health signals without duplicating raw events;
+- merge only version-verified AgentLens supplemental fields without duplicating raw events;
 - generate a concise human assessment with evidence references;
 - use Luna for routine assessments and Terra only for escalation;
 - notify on material state changes, anomalies, completion, and failure;
@@ -34,7 +34,7 @@ Watchtower shall:
 ### 2.2 Quality goals
 
 - A model assessment must never erase or downgrade a deterministic critical signal.
-- Every nontrivial claim must cite one or more normalized event IDs.
+- Every nontrivial claim must cite one or more normalized event, deterministic signal, or system evidence IDs.
 - Restarts must not resend already acknowledged events.
 - Unknown Codex event types must be preserved and must not crash ingestion.
 - A missing AgentLens or Codex Trace instance must degrade capability, not stop monitoring.
@@ -59,7 +59,7 @@ The MVP shall not:
 There is one source of truth per concern:
 
 - **Codex rollout JSONL:** chronological session evidence;
-- **AgentLens:** deterministic derived health and efficiency signals;
+- **AgentLens:** optional, version-gated supplemental metrics; the inspected Codex adapter does not expose the full timeline/file/loop detail available for other agents;
 - **Watchtower state store:** cursors, assessments, delivery state, and operator configuration;
 - **Codex Trace:** detailed human visualization, not authoritative storage;
 - **Luna/Terra:** interpretation only.
@@ -78,8 +78,8 @@ Watchtower does not concatenate complete AgentLens and Codex Trace outputs. Both
           Incremental parser ------> raw-event cursor/state
                   |
                   v
-             Normalizer <---------- AgentLens MCP adapter
-                  |                     (optional)
+             Normalizer <---------- AgentLens compatibility adapter
+                  |                     (optional, limited)
                   v
           Deterministic rules
                   |
@@ -105,7 +105,7 @@ Watchtower does not concatenate complete AgentLens and Codex Trace outputs. Both
  local status API   Telegram notifier
       |
       v
- Codex Trace deep link / session ID
+ Codex Trace API base / session ID
 ```
 
 ## 5. Component contracts
@@ -117,26 +117,28 @@ Responsibilities:
 - watch the configured Codex sessions root;
 - identify new and modified `rollout-*.jsonl` files;
 - extract session ID, workspace, start time, source, model, and original goal;
-- classify lifecycle as `running`, `waiting`, `completed`, `failed`, or `unknown`;
+- classify lifecycle as `active_turn`, `between_turns`, `waiting`, `terminal_completed`, `terminal_failed`, or `unknown`;
 - map a session to a stable Watchtower record.
 
 The first user task message is the default goal. A launcher integration may supply a clearer explicit goal and path boundaries.
 
 ### 5.2 Incremental parser
 
-The parser reads only complete newline-terminated JSON records. Its cursor is:
+The parser reads only complete newline-terminated JSON records. Its cursor includes file identity, byte position, and a bounded replay checkpoint:
 
 ```text
-<device>:<inode>:<byte-offset>:<last-event-hash>
+<device>:<inode>:<byte-offset>:<checkpoint-hash>
 ```
 
 Requirements:
 
 - never process a partial final line;
-- detect truncation or inode replacement;
+- detect truncation, inode replacement/reuse, copy-truncate, and prefix mismatch;
 - deduplicate after restart using the event hash;
-- preserve unknown event payloads in bounded raw storage;
-- cap individual command output before normalization while retaining its hash and byte length.
+- on any identity/checkpoint mismatch, replay from the last verified newline checkpoint (or file start) and rely on stable event IDs for deduplication;
+- preserve only redacted, bounded unknown-event summaries in SQLite; retain source hashes and byte lengths, not raw payloads;
+- redact before persistence, cap individual command output before normalization, and retain its hash and original byte length;
+- open only regular files owned by the configured user under the resolved sessions root; reject symlink escape, FIFO/device files, and files exceeding configured size limits.
 
 ### 5.3 Normalizer
 
@@ -153,29 +155,23 @@ The normalizer converts version-specific Codex records into `WatchtowerEvent` va
 - `lifecycle`
 - `unknown`
 
-Each event has a stable ID, timestamp, short factual summary, source type, and optional path/exit code. It must not ask a model to parse events that can be parsed deterministically.
+Each event has a stable ID, timestamp, short factual summary, source type, and optional path/exit code. It must not ask a model to parse events that can be parsed deterministically. Domain validation additionally enforces RFC 3339 timestamps, unique and monotonic event IDs/times, `opened_at <= closed_at`, cursor consistency, and event timestamps within the declared window; JSON Schema alone cannot express all of these invariants.
 
 ### 5.4 AgentLens adapter
 
-Primary interface: Streamable HTTP MCP.
+The inspected AgentLens commit exposes Streamable HTTP MCP at loopback port `4316`, path `/mcp`. Its Codex parser currently exposes prompt/token metadata but empty timeline, tool counts, and file lists. The primary integration is therefore a version-gated compatibility adapter, not a general health-signal contract.
 
 Used tools:
 
-- `get_recent_sessions` to correlate Watchtower and AgentLens sessions;
-- `get_session_detail` to obtain the current timeline and session signals;
-- `get_efficiency_report` for final or operator-requested analysis, not every assessment.
+- `get_recent_sessions` for limited discovery metadata;
+- `get_session_detail` for fields actually present in the pinned response;
+- `get_efficiency_report` only after a compatibility fixture proves meaningful Codex data.
 
-Fallback: read-only SQLite snapshot if MCP is unavailable and a database path is explicitly configured.
+There is no reliable exact-ID or workspace/start-time correlation in the inspected MCP responses: AgentLens uses the rollout filename as its Codex session ID and omits workspace/precise start time. Before enabling enrichment, an integration spike must either land an upstream AgentLens contract carrying canonical rollout path/session metadata, or implement a version-pinned local adapter from explicitly documented fields. Ambiguity returns no match; Watchtower never creates a second logical session from AgentLens data.
 
-Adapter output is limited to:
+Fallback: read-only SQLite snapshot only for explicitly supported AgentLens schema versions and only if a compatibility fixture demonstrates the required canonical correlation fields.
 
-- loop signal names and severities;
-- error count and recurring error classes;
-- changed/read files;
-- tool repetition;
-- token/context growth;
-- elapsed time and latest activity;
-- outcome, when known.
+Adapter output is limited to verified fields such as prompt metadata and token/context counters. Loop, error, file, tool, and outcome fields remain unavailable unless a future version-specific compatibility fixture proves them.
 
 AgentLens outages set `agentlens_available=false`; they do not halt ingestion or overwrite the last known signals.
 
@@ -206,14 +202,16 @@ Time alone is not evidence of stagnation when a long-running command is still ac
 
 ### 5.6 Observation packet builder
 
-The packet conforms to `schemas/observation.schema.json` and contains:
+The packet conforms to `schemas/observation.schema.json` and always contains:
 
 - explicit goal and acceptance criteria;
 - current session metadata;
-- previous assessment;
+- previous assessment, explicitly `null` for the first packet;
 - only events since the previous cursor;
 - compact deterministic signals;
-- redaction report.
+- redaction-class report, explicitly empty when nothing was removed.
+
+Deterministic signals are structured records with stable ID, kind, severity, source, evidence event IDs, observation time, freshness, summary, and typed payload. Empty acceptance criteria are represented as `[]`; the field is never omitted.
 
 Limits:
 
@@ -267,10 +265,11 @@ The reconciler produces the authoritative assessment:
 2. a Terra result supersedes Luna prose but not deterministic evidence;
 3. unsupported model evidence references invalidate the response and trigger one retry;
 4. a second invalid response falls back to a rule-generated assessment;
-5. completion requires a Codex lifecycle completion event, not model inference;
-6. failure requires process/task evidence or an explicit deterministic failure rule.
+5. Codex `TurnComplete`/wire `task_complete` changes state to `between_turns`; it never proves terminal session completion;
+6. terminal completion requires launcher/process exit evidence plus a configurable quiet grace period with no new turn, or an explicit operator-provided terminal marker;
+7. terminal failure requires non-zero launcher/process exit evidence or an explicit deterministic process failure rule.
 
-### 5.9 Status API
+### 5.9 Status and operator API
 
 Local bind only by default: `127.0.0.1`.
 
@@ -281,10 +280,10 @@ Proposed endpoints:
 - `GET /api/v1/sessions/{id}`
 - `GET /api/v1/sessions/{id}/events?after=<cursor>`
 - `GET /api/v1/sessions/{id}/assessment`
-- `POST /api/v1/sessions/{id}/assess` for operator-requested Terra escalation
+- `POST /api/v1/sessions/{id}/assess` for an authenticated, rate-limited operator-requested Terra escalation
 - `GET /api/v1/events` for SSE state updates.
 
-No mutation of Codex is exposed.
+No mutation of Codex or the workspace is exposed. The POST endpoint does mutate Watchtower state and can incur model cost. It is disabled unless an operator token is configured and requires bearer authentication, strict Origin/Host allowlists, disabled wildcard CORS, per-session concurrency limits, global rate/cost limits, and idempotency keys. The default remains loopback-only, but loopback is not treated as authentication.
 
 ### 5.10 Telegram notifier
 
@@ -293,7 +292,7 @@ Delivery policy:
 Send when:
 
 - `needs_attention` changes from false to true;
-- status enters `waiting`, `stalled`, `looping`, `off_scope`, `failed`, or `completed`;
+- status enters `waiting`, `stalled`, `looping`, `off_scope`, `terminal_failed`, or `terminal_completed`;
 - a warning persists and materially changes;
 - a configured periodic digest is due, default disabled.
 
@@ -305,7 +304,7 @@ Deduplication key:
 session_id + authoritative_status + concern_fingerprint + event_cursor
 ```
 
-A message includes elapsed time, current action, alignment, concerns, latest test result, changed files, and session ID/deep link when available.
+A message includes elapsed time, current action, alignment, concerns, latest test result, redacted changed paths, and session ID/API base when available. Telegram is a separate remote sink: it always applies trusted-remote redaction, never sends prompts or command-output excerpts, validates the configured `chat_id` against an allowlist, escapes Telegram markup, and omits local deep links.
 
 ## 6. State and persistence
 
@@ -321,16 +320,16 @@ Core tables:
 - `deliveries`
 - `model_calls`
 
-Raw event retention is bounded and configurable. Normalized events and assessments retain their source hashes for auditability.
+Raw rollout payloads are never copied into Watchtower SQLite. Redaction occurs before persistence; normalized summaries retain source hashes and original byte lengths for auditability. Bounded retention applies to these redacted summaries.
 
-Secrets never enter SQLite. Tokens and API credentials come from environment variables or an external secret store.
+Watchtower makes a best effort to prevent recognized secret material entering SQLite, backed by seeded-secret tests; arbitrary unknown secrets cannot be guaranteed detectable. Tokens and API credentials come from environment variables or an external secret store. The database and state directory use owner-only permissions.
 
 ## 7. Privacy and security
 
 ### 7.1 Trust modes
 
 - `local`: model endpoint is loopback/local; source paths and command excerpts may be sent after secret redaction;
-- `trusted-remote`: configured remote endpoint; paths are workspace-relative and sensitive output is aggressively reduced;
+- `trusted-remote`: explicitly consented HTTPS endpoint on an allowlist; paths are workspace-relative and sensitive output is aggressively reduced;
 - `metadata-only`: no command output or prompt text leaves the machine.
 
 ### 7.2 Redaction
@@ -351,12 +350,14 @@ The packet records which redaction classes were applied, never the removed value
 
 Repository files, command output, logs, and agent messages are untrusted data. The assessment prompt states that embedded instructions are evidence, not commands. The model receives no tools and cannot write files or contact Codex.
 
+Remote model transport requires valid HTTPS certificates, rejects redirects, link-local/loopback/metadata destinations and proxy-environment inheritance by default, caps request/response sizes and retry budgets, and records provider retention/logging policy plus explicit operator consent before first transmission. Local mode may use loopback HTTP.
+
 ## 8. Failure handling
 
 - Malformed JSONL line: wait if partial; quarantine and continue if newline-terminated but invalid.
 - Unknown event: store as `unknown`, increment parser metric, continue.
 - AgentLens unavailable: use Codex events and local rules; show degraded status.
-- Codex Trace unavailable: omit deep link; monitoring continues.
+- Codex Trace unavailable: omit drill-down identifiers; monitoring continues.
 - Luna timeout: retry once, then rule-only assessment and optional Terra escalation.
 - Terra timeout: preserve deterministic `needs_attention`; send rule-only alert.
 - Telegram failure: durable retry with exponential backoff and deduplication.
@@ -439,9 +440,9 @@ The MVP is accepted when:
 1. A two-hour replay fixture can be ingested incrementally without rereading the full file.
 2. Restarting midway produces no duplicate events or Telegram messages.
 3. Monitoring works with both AgentLens and Codex Trace stopped.
-4. Starting AgentLens enriches the same session without creating a duplicate session.
+4. A fixture-compatible AgentLens enriches the same session through canonical correlation without creating a duplicate; incompatible versions remain disabled with explicit degraded status.
 5. Rule-based loops, repeated errors, waiting, failure, and forbidden-path changes are detected in fixtures.
-6. Luna assessments validate against the JSON schema and cite existing event IDs.
+6. Luna assessments validate against the JSON schema and cite existing event, deterministic signal, or system evidence IDs.
 7. Terra runs only under documented escalation conditions.
 8. Deterministic critical signals survive contradictory model output.
 9. Remote-mode packets pass redaction tests with seeded secrets.
@@ -454,8 +455,8 @@ The MVP is accepted when:
 These are configuration choices, not missing requirements:
 
 - Python versus Rust implementation: the plan starts with Python for parser/model iteration speed and leaves a measured rewrite threshold.
-- Exact Luna/Terra identifiers: resolved from runtime configuration.
-- Telegram transport: direct Bot API or existing Hermes delivery adapter; both must implement the same notifier interface.
-- Codex Trace deep-link format: adapter-specific and optional until its stable URL contract is verified.
+- Exact Luna/Terra identifiers: resolved and verified by the mandatory model contract spike before implementation.
+- Telegram transport: direct Bot API or existing Hermes delivery adapter; both must implement the same notifier and remote-sink privacy interface.
+- Codex Trace deep-link format: absent from MVP unless the mandatory compatibility spike verifies a stable URL contract.
 
-No other MVP behavior is intentionally left undefined.
+These decisions must be resolved by Phase -1 spikes before affected interfaces are frozen; unsupported integrations fail closed rather than being guessed.

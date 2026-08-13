@@ -29,19 +29,22 @@ Codex formats evolve. The implementation must treat unknown JSONL event types as
 - Inspected commit: `af8797740ccbba6d21748a023a9b448b53847467`
 - License: MIT
 
-Verified from source:
+Verified from source at the pinned commit:
 
 - reads Codex local session files and accepts Codex OpenTelemetry;
 - stores normalized sessions and timeline entries in SQLite;
-- exposes a Streamable HTTP MCP server;
+- exposes Streamable HTTP MCP on loopback port `4316`, path `/mcp`;
 - MCP tools include `get_recent_sessions`, `get_session_detail`, and `get_efficiency_report`;
-- session summaries contain errors, tool counts, loop signals, and changed files;
-- deterministic detectors cover repeated tools, recurring errors, oscillating edits, escalating scope, and context accumulation.
+- the general schema supports errors, tool counts, loop signals, and changed files;
+- the pinned Codex parser supplies empty timeline/tool/file structures, so those general detectors are not useful Codex enrichment;
+- `get_recent_sessions` and `get_session_detail` omit canonical workspace and precise start-time fields needed for robust fallback correlation;
+- AgentLens uses the rollout filename without `.jsonl` as its Codex session ID, rather than the canonical ID inside `session_meta`.
 
 Integration decision:
 
-- prefer AgentLens MCP as the supported boundary;
-- permit read-only SQLite access only as a documented fallback;
+- run an early compatibility spike and prefer an upstream canonical correlation field;
+- enable MCP enrichment only for fields proven by version-pinned fixtures;
+- permit read-only SQLite access only for explicitly supported schema versions and proven canonical correlation;
 - never scrape the AgentLens web UI.
 
 ## Codex Trace
@@ -66,10 +69,10 @@ Verified from source:
 Integration decision:
 
 - Codex rollout JSONL remains the source of truth for ingestion;
-- Codex Trace is the detailed human drill-down and an optional parser/API adapter;
+- Codex Trace is an optional manually correlated drill-down and parser/API adapter;
 - Watchtower must not require Codex Trace to be running in the first MVP.
 
-This avoids a hard dependency on another young project while preserving direct links into its UI.
+This avoids a hard dependency on another young project. A stable clickable deep-link contract is not verified; the MVP may expose only the API base and session identifier.
 
 ## Models: Luna and Terra
 
