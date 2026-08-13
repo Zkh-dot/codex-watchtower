@@ -167,29 +167,40 @@ def _reserve_and_check_budget(
 ) -> tuple[int | None, str | None]:
     """Atomically reserve a model-call slot and check ceilings.
 
+    Uses ``BEGIN IMMEDIATE`` so concurrent callers block on the
+    transaction and cannot both pass the last slot (R4#2).
+
     Returns (row_id, failure_reason). If failure_reason is not None,
     the reservation was cancelled and the caller must not proceed.
     If row_id is not None, the caller must finalize or cancel it.
     """
-    with repo.transaction():
+    estimated = _estimate_cost_cents(input_characters, assessed_by)
+    repo.begin_transaction()
+    try:
         row_id = repo.reserve_model_call(
             session_id,
             assessed_by,
             started_at=started_at,
             input_characters=input_characters,
+            estimated_cost_cents=estimated,
         )
         if budget.per_session_assessment_ceiling is not None:
             count = repo.count_model_calls_for_session(session_id)
             if count > budget.per_session_assessment_ceiling:
                 repo.cancel_model_call(row_id)
+                repo.commit_transaction()
                 return None, "per_session_ceiling_exhausted"
         if budget.daily_cost_ceiling_cents is not None:
             today = datetime.now(UTC).strftime("%Y-%m-%d")
             spent = repo.sum_daily_cost_cents(today)
-            estimated = _estimate_cost_cents(input_characters, assessed_by)
-            if spent + estimated > budget.daily_cost_ceiling_cents:
+            if spent > budget.daily_cost_ceiling_cents:
                 repo.cancel_model_call(row_id)
+                repo.commit_transaction()
                 return None, "daily_cost_ceiling_exhausted"
+        repo.commit_transaction()
+    except Exception:
+        repo.rollback_transaction()
+        raise
     return row_id, None
 
 
@@ -257,15 +268,20 @@ def run_luna_assessment(
             failure_reason=budget_reason,
         )
 
-    result = run_luna(
-        profile,
-        observation,
-        http_client=http_client,
-        max_request_bytes=budget.packet_character_budget * 4,
-    )
+    assert row_id is not None
+    try:
+        result = run_luna(
+            profile,
+            observation,
+            http_client=http_client,
+            max_request_bytes=budget.packet_character_budget * 4,
+        )
+    except Exception:
+        # Release the reservation so the slot is not permanently consumed (R4#4).
+        repo.cancel_model_call(row_id)
+        raise
 
     success = result.assessment is not None
-    assert row_id is not None
     _finalize_model_call(
         repo,
         row_id,
@@ -324,17 +340,21 @@ def run_terra_assessment(
             failure_reason=budget_reason,
         )
 
-    result = run_terra(
-        profile,
-        observation,
-        luna_assessment,
-        escalation_reason=escalation_reason,
-        http_client=http_client,
-        max_request_bytes=budget.packet_character_budget * 4,
-    )
+    assert row_id is not None
+    try:
+        result = run_terra(
+            profile,
+            observation,
+            luna_assessment,
+            escalation_reason=escalation_reason,
+            http_client=http_client,
+            max_request_bytes=budget.packet_character_budget * 4,
+        )
+    except Exception:
+        repo.cancel_model_call(row_id)
+        raise
 
     success = result.assessment is not None
-    assert row_id is not None
     _finalize_model_call(
         repo,
         row_id,

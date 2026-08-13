@@ -744,21 +744,24 @@ class Repository:
         *,
         started_at: str,
         input_characters: int | None,
+        estimated_cost_cents: int | None = None,
     ) -> int:
         """Atomically reserve a model-call slot by inserting a pending row.
 
         The reservation counts toward the ceiling immediately so
-        concurrent callers see it (R3#3). Caller checks ceilings after
-        this insert and must cancel if exhausted.
+        concurrent callers see it (R3#3). The estimated cost is stored
+        in the row so ``sum_daily_cost_cents`` includes it (R4#2).
+        Caller checks ceilings after this insert and must cancel if
+        exhausted.
         """
         cursor = self._conn.execute(
             """
             INSERT INTO model_calls (
                 session_id, assessed_by, started_at, finished_at, latency_ms,
                 input_characters, success, error_class, estimated_cost_cents
-            ) VALUES (?, ?, ?, NULL, NULL, ?, 0, NULL, NULL)
+            ) VALUES (?, ?, ?, NULL, NULL, ?, 0, NULL, ?)
             """,
-            (session_id, assessed_by, started_at, input_characters),
+            (session_id, assessed_by, started_at, input_characters, estimated_cost_cents),
         )
         assert cursor.lastrowid is not None
         return cursor.lastrowid
@@ -797,6 +800,48 @@ class Repository:
     def cancel_model_call(self, row_id: int) -> None:
         """Delete a reserved model-call row when the budget is exhausted."""
         self._conn.execute("DELETE FROM model_calls WHERE row_id = ?", (row_id,))
+
+    # --- scheduler state (R4#3) --------------------------------------
+
+    def get_scheduler_state(self, session_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM scheduler_state WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def save_scheduler_state(
+        self,
+        session_id: str,
+        *,
+        last_assessed_at: str | None,
+        last_lifecycle_state: str | None,
+        last_signal_fingerprint: str | None,
+        last_material_progress_cursor: int | None = None,
+        in_progress: bool = False,
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO scheduler_state (
+                session_id, last_assessed_at, last_lifecycle_state,
+                last_signal_fingerprint, last_material_progress_cursor, in_progress
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (session_id) DO UPDATE SET
+                last_assessed_at = excluded.last_assessed_at,
+                last_lifecycle_state = excluded.last_lifecycle_state,
+                last_signal_fingerprint = excluded.last_signal_fingerprint,
+                last_material_progress_cursor = excluded.last_material_progress_cursor,
+                in_progress = excluded.in_progress,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            """,
+            (
+                session_id,
+                last_assessed_at,
+                last_lifecycle_state,
+                last_signal_fingerprint,
+                last_material_progress_cursor,
+                1 if in_progress else 0,
+            ),
+        )
 
     def create_process_evidence(
         self,

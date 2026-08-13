@@ -225,3 +225,16 @@ CREATE TABLE IF NOT EXISTS model_calls (
 
 CREATE INDEX IF NOT EXISTS idx_model_calls_session
     ON model_calls (session_id, row_id DESC);
+
+-- Scheduler state snapshots: persisted at each completed assessment so
+-- the next poll can compare current lifecycle/signal state against the
+-- values at the last assessment (R4#3).
+CREATE TABLE IF NOT EXISTS scheduler_state (
+    session_id TEXT PRIMARY KEY REFERENCES sessions (session_id),
+    last_assessed_at TEXT,
+    last_lifecycle_state TEXT,
+    last_signal_fingerprint TEXT,
+    last_material_progress_cursor INTEGER,
+    in_progress INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);

@@ -275,7 +275,9 @@ def _run_scheduled_luna(
 
     Uses the AssessmentScheduler to decide which sessions are due for a
     Luna assessment based on lifecycle changes, signal changes, and
-    routine cadence (review #2).
+    routine cadence. Scheduler state is persisted in scheduler_state
+    so evidence-change triggers compare against the values at the last
+    completed assessment, not the current values (R4#3).
     """
     import hashlib
     from datetime import UTC, datetime
@@ -310,27 +312,39 @@ def _run_scheduled_luna(
             "|".join(sorted(s.id for s in active_signals)).encode()
         ).hexdigest()
 
-        # Derive last_assessed_at from the latest completed model call,
-        # not from reconciliation time — every ingestion poll writes a
-        # fresh reconciled row, so using reconciled_at would suppress Luna
-        # indefinitely (review R3#1).
-        last_assessed_str = repo.latest_model_call_started_at(session_id)
-        if last_assessed_str:
-            try:
-                last_assessed = datetime.fromisoformat(
-                    last_assessed_str[:-1] + "+00:00"
-                    if last_assessed_str.endswith("Z")
-                    else last_assessed_str
-                )
-            except ValueError:
-                last_assessed = None
+        # Load persisted scheduler state from the last completed assessment.
+        # This ensures lifecycle/signal changes are detected by comparing
+        # against the values at assessment time, not the current values (R4#3).
+        persisted = repo.get_scheduler_state(session_id)
+        if persisted is not None:
+            last_assessed_str = persisted["last_assessed_at"]
+            last_lifecycle_str = persisted["last_lifecycle_state"]
+            last_fingerprint = persisted["last_signal_fingerprint"]
+            last_assessed = None
+            if last_assessed_str:
+                try:
+                    last_assessed = datetime.fromisoformat(
+                        last_assessed_str[:-1] + "+00:00"
+                        if last_assessed_str.endswith("Z")
+                        else last_assessed_str
+                    )
+                except ValueError:
+                    pass
+            last_lifecycle = None
+            if last_lifecycle_str:
+                try:
+                    last_lifecycle = _domain.SessionState(last_lifecycle_str)
+                except ValueError:
+                    pass
         else:
             last_assessed = None
+            last_lifecycle = None
+            last_fingerprint = None
 
         sched_state = SchedulerState(
             last_assessed_at=last_assessed,
-            last_lifecycle_state=state_enum,
-            last_signal_fingerprint=fingerprint,
+            last_lifecycle_state=last_lifecycle,
+            last_signal_fingerprint=last_fingerprint,
         )
 
         decision = should_schedule_assessment(
@@ -346,6 +360,16 @@ def _run_scheduled_luna(
         outcome = run_luna_assessment(repo, session_id, luna_config, budget, now=now)
         if outcome.assessment is not None or outcome.failure_reason is not None:
             reconcile_with_assessment(repo, session_id, outcome.assessment, now=now)
+
+        # Persist scheduler state snapshot for the next poll's comparison.
+        repo.save_scheduler_state(
+            session_id,
+            last_assessed_at=now.isoformat(),
+            last_lifecycle_state=state_enum.value,
+            last_signal_fingerprint=fingerprint,
+            last_material_progress_cursor=None,
+            in_progress=False,
+        )
 
 
 def _dispatch_notifications(repo: Repository, notifier: object, chat_ids: list[str]) -> None:
