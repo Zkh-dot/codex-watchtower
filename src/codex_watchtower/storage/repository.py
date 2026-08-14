@@ -889,7 +889,6 @@ class Repository:
         """
         import fcntl
         import os
-        import time
         from pathlib import Path as _Path
 
         if lease_dir is None:
@@ -912,22 +911,21 @@ class Repository:
             (f"-{lease_seconds} seconds",),
         ).fetchall()
 
-        now = time.time()
         recovered = 0
         for row in stale_rows:
             owner_id = row["owner_id"]
             if owner_id is not None:
                 lease_file = _Path(lease_dir) / f"lease.{owner_id}"
                 if lease_file.exists():
-                    mtime = lease_file.stat().st_mtime
-                    if now - mtime < lease_seconds:
-                        continue
-                    # Mtime is stale — try to acquire the flock as
-                    # fencing proof that the owner is dead (R12#1).
+                    # The flock is the authoritative liveness check (R13#1).
+                    # A process may have refreshed its heartbeat (mtime)
+                    # and then crashed, leaving a fresh mtime but no live
+                    # flock. Therefore we always attempt the non-blocking
+                    # flock regardless of mtime.
                     try:
                         fd = os.open(str(lease_file), os.O_RDWR)
                     except OSError:
-                        # File was removed between stat and open —
+                        # File was removed between exists() and open() —
                         # owner is gone.
                         pass
                     else:
