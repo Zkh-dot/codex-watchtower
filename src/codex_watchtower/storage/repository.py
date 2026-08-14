@@ -869,13 +869,17 @@ class Repository:
         consumes a ceiling slot and reserved cost. This method removes
         those rows so the slots and budget are released (R5#1).
 
-        Owner liveness is determined by a file-based lease (R11#1):
-        for each stale reservation, the method checks whether
-        ``lease_dir / f"lease.{owner_id}"`` exists and its mtime is
-        within the lease window. If the file is missing or stale, the
-        owner is considered dead. File operations are atomic and do not
-        contend for SQLite's writer lock, so recovery cannot race with
-        a live owner's heartbeat retry backoff.
+        Owner liveness uses a two-phase fencing protocol (R12#1):
+        1. Quick filter: check the lease file's mtime. If recent, skip.
+        2. Fencing: try to acquire a non-blocking exclusive flock on the
+           lease file. If the owner is alive, it holds the lock and the
+           attempt fails (BlockingIOError). If the owner is dead (crash/
+           SIGKILL), the OS has released the lock and the attempt
+           succeeds, proving the owner is gone before any DELETE.
+
+        This eliminates the TOCTOU race where recovery reads a stale
+        mtime and then deletes the reservation while the live owner
+        renews the lease in between.
 
         This method must only be called from the ``serve`` startup, not
         from ``open_database()``, so ``inspect``/``doctor`` cannot
@@ -883,12 +887,12 @@ class Repository:
 
         Returns the number of abandoned reservations recovered.
         """
+        import fcntl
+        import os
         import time
         from pathlib import Path as _Path
 
         if lease_dir is None:
-            # Fallback: reclaim all stale reservations without lease check.
-            # Only used in tests that don't set up lease files.
             cursor = self._conn.execute(
                 """
                 DELETE FROM model_calls
@@ -917,8 +921,25 @@ class Repository:
                 if lease_file.exists():
                     mtime = lease_file.stat().st_mtime
                     if now - mtime < lease_seconds:
-                        # Owner is alive — do not reclaim.
                         continue
+                    # Mtime is stale — try to acquire the flock as
+                    # fencing proof that the owner is dead (R12#1).
+                    try:
+                        fd = os.open(str(lease_file), os.O_RDWR)
+                    except OSError:
+                        # File was removed between stat and open —
+                        # owner is gone.
+                        pass
+                    else:
+                        try:
+                            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        except BlockingIOError:
+                            # Owner is alive (holds the lock) — skip.
+                            os.close(fd)
+                            continue
+                        else:
+                            # Lock acquired — owner is dead. Clean up.
+                            os.close(fd)
             self._conn.execute("DELETE FROM model_calls WHERE row_id = ?", (row["row_id"],))
             recovered += 1
         return recovered

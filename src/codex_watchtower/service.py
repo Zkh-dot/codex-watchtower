@@ -232,13 +232,21 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
 
     owner_id = str(uuid.uuid4())
 
-    # File-based heartbeat for lease management (R11#1).
+    # File-based heartbeat for lease management (R11#1, R12#1).
     # A plain file touch is atomic and does not contend for SQLite's
     # writer lock, so a long ingestion transaction cannot block the
     # heartbeat or cause recovery to reclaim a live owner during
     # retry backoff. Recovery checks the file's mtime against the lease.
+    # Additionally, an exclusive flock is held on the lease file for
+    # the process lifetime. Recovery must acquire the lock before
+    # deleting reservations, which is only possible after the process
+    # has died (crash/SIGKILL releases the lock at the OS level).
     lease_file = config.state_dir / f"lease.{owner_id}"
     lease_file.touch()
+    lease_fd = os.open(str(lease_file), os.O_RDWR)
+    import fcntl
+
+    fcntl.flock(lease_fd, fcntl.LOCK_EX)
 
     # Recover abandoned model-call reservations from a previous crashed
     # serve process. This runs only in the serve command, not in
@@ -308,6 +316,7 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
     try:
         await asyncio.gather(server.serve(), ingestion_loop(), heartbeat_loop())
     finally:
+        os.close(lease_fd)
         lease_file.unlink(missing_ok=True)
 
 
