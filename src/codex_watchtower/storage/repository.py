@@ -15,6 +15,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from codex_watchtower import domain
@@ -855,7 +856,12 @@ class Repository:
             (owner_id,),
         )
 
-    def recover_abandoned_reservations(self, *, lease_seconds: int = 300) -> int:
+    def recover_abandoned_reservations(
+        self,
+        *,
+        lease_dir: Path | None = None,
+        lease_seconds: int = 300,
+    ) -> int:
         """Delete model_calls rows with finished_at=NULL whose owner is provably dead.
 
         A crash, SIGKILL, or power loss after reserve_model_call() but
@@ -863,12 +869,13 @@ class Repository:
         consumes a ceiling slot and reserved cost. This method removes
         those rows so the slots and budget are released (R5#1).
 
-        An owner is considered dead if its ``owner_id`` is not present in
-        ``service_instances`` (crashed before registering, or deregistered
-        on clean shutdown), or if its heartbeat in
-        ``service_instances`` is older than the lease (crashed after
-        registering but before deregistering). This is immune to PID
-        reuse because each serve instance gets a fresh UUID (R7#1).
+        Owner liveness is determined by a file-based lease (R11#1):
+        for each stale reservation, the method checks whether
+        ``lease_dir / f"lease.{owner_id}"`` exists and its mtime is
+        within the lease window. If the file is missing or stale, the
+        owner is considered dead. File operations are atomic and do not
+        contend for SQLite's writer lock, so recovery cannot race with
+        a live owner's heartbeat retry backoff.
 
         This method must only be called from the ``serve`` startup, not
         from ``open_database()``, so ``inspect``/``doctor`` cannot
@@ -876,30 +883,45 @@ class Repository:
 
         Returns the number of abandoned reservations recovered.
         """
-        # First, purge service_instances rows with stale heartbeats.
-        self._conn.execute(
-            """
-            DELETE FROM service_instances
-            WHERE last_heartbeat < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)
-            """,
-            (f"-{lease_seconds} seconds",),
-        )
+        import time
+        from pathlib import Path as _Path
 
-        # Then delete stale reservations whose owner_id is no longer
-        # registered (or is NULL, for rows created before migration 004).
-        cursor = self._conn.execute(
+        if lease_dir is None:
+            # Fallback: reclaim all stale reservations without lease check.
+            # Only used in tests that don't set up lease files.
+            cursor = self._conn.execute(
+                """
+                DELETE FROM model_calls
+                WHERE finished_at IS NULL
+                  AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)
+                """,
+                (f"-{lease_seconds} seconds",),
+            )
+            return cursor.rowcount or 0
+
+        stale_rows = self._conn.execute(
             """
-            DELETE FROM model_calls
+            SELECT row_id, owner_id FROM model_calls
             WHERE finished_at IS NULL
               AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)
-              AND (
-                    owner_id IS NULL
-                    OR owner_id NOT IN (SELECT owner_id FROM service_instances)
-                  )
             """,
             (f"-{lease_seconds} seconds",),
-        )
-        return cursor.rowcount or 0
+        ).fetchall()
+
+        now = time.time()
+        recovered = 0
+        for row in stale_rows:
+            owner_id = row["owner_id"]
+            if owner_id is not None:
+                lease_file = _Path(lease_dir) / f"lease.{owner_id}"
+                if lease_file.exists():
+                    mtime = lease_file.stat().st_mtime
+                    if now - mtime < lease_seconds:
+                        # Owner is alive — do not reclaim.
+                        continue
+            self._conn.execute("DELETE FROM model_calls WHERE row_id = ?", (row["row_id"],))
+            recovered += 1
+        return recovered
 
     # --- scheduler state (R4#3) --------------------------------------
 

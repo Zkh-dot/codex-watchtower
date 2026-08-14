@@ -225,32 +225,27 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
     conn = db.open_database(config.state_dir / "state.db")
     repo = Repository(conn)
 
-    # Dedicated autocommit connection for lease/heartbeat operations.
-    # This ensures heartbeat writes commit independently of ingestion
-    # transactions, so a long ingestion transaction cannot cause the
-    # heartbeat to be invisible to a second connection or lost on
-    # rollback (R9#1).
-    lease_conn = db.connect(config.state_dir / "state.db")
-    lease_repo = Repository(lease_conn)
-
     # Generate a unique owner identity for this serve process (R7#1).
     # Using a UUID instead of PID avoids the PID-reuse race where a
     # restarted process gets the same PID as a crashed owner.
     import uuid
 
     owner_id = str(uuid.uuid4())
-    owner_pid = os.getpid()
+
+    # File-based heartbeat for lease management (R11#1).
+    # A plain file touch is atomic and does not contend for SQLite's
+    # writer lock, so a long ingestion transaction cannot block the
+    # heartbeat or cause recovery to reclaim a live owner during
+    # retry backoff. Recovery checks the file's mtime against the lease.
+    lease_file = config.state_dir / f"lease.{owner_id}"
+    lease_file.touch()
 
     # Recover abandoned model-call reservations from a previous crashed
     # serve process. This runs only in the serve command, not in
     # open_database(), so inspect/doctor cannot reclaim a live serve
-    # process's reservations (R6#1). Only reservations whose owner_id
-    # is not registered (or has a stale heartbeat) are reclaimed.
-    repo.recover_abandoned_reservations()
-
-    # Register this serve instance so recovery can tell we're alive.
-    # Uses the dedicated lease connection (R9#1).
-    lease_repo.register_service_instance(owner_id, owner_pid)
+    # process's reservations (R6#1). Only reservations whose owner's
+    # lease file is missing or stale are reclaimed (R11#1).
+    repo.recover_abandoned_reservations(lease_dir=config.state_dir)
 
     ingestion = IngestionService(config.sessions_root, repo)
 
@@ -297,38 +292,23 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
     async def heartbeat_loop() -> None:
         """Renew the lease independently of ingestion/model execution (R8#2).
 
-        Uses a dedicated autocommit connection (R9#1) so heartbeat writes
-        commit immediately and are visible to other connections even
-        while an ingestion transaction is open.
-
-        Retries on ``database is locked`` with bounded backoff so a long
-        ingestion write transaction cannot crash the service (R10#1).
-        The heartbeat interval (60s) is well below the recovery lease
-        (300s), so a few missed cycles do not cause a live owner to be
-        reclaimed.
+        Uses a file-based heartbeat (R11#1) — a plain ``touch()`` on the
+        lease file. This is atomic and does not contend for SQLite's
+        writer lock, so a long ingestion transaction cannot block the
+        heartbeat or cause recovery to reclaim a live owner during retry
+        backoff. The heartbeat interval (60s) is well below the recovery
+        lease (300s), so a few missed cycles do not cause a live owner
+        to be reclaimed.
         """
-        import sqlite3 as _sqlite3
-
         heartbeat_interval = min(60, poll_interval)
         while True:
-            for attempt in range(3):
-                try:
-                    lease_repo.update_heartbeat(owner_id)
-                    break
-                except _sqlite3.OperationalError as exc:
-                    if "database is locked" in str(exc) and attempt < 2:
-                        await asyncio.sleep(1.0 * (attempt + 1))
-                        continue
-                    # On the final attempt or non-lock errors, log and
-                    # move on — the next cycle will retry.
-                    break
+            lease_file.touch()
             await asyncio.sleep(heartbeat_interval)
 
     try:
         await asyncio.gather(server.serve(), ingestion_loop(), heartbeat_loop())
     finally:
-        lease_repo.deregister_service_instance(owner_id)
-        lease_conn.close()
+        lease_file.unlink(missing_ok=True)
 
 
 def _run_scheduled_luna(
