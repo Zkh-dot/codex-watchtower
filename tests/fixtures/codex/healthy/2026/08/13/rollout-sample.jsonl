@@ -1,0 +1,10 @@
+{"timestamp": "2026-08-13T10:00:00Z", "type": "session_meta", "payload": {"id": "sess-healthy-1", "timestamp": "2026-08-13T10:00:00Z", "cwd": "/home/user/project", "originator": "cli", "cli_version": "0.133.0", "source": "exec", "model_provider": "gpt-5-codex", "base_instructions": "You are Codex.", "git": {"branch": "main"}, "thread_source": "cli"}}
+{"timestamp": "2026-08-13T10:00:05Z", "type": "turn_started", "payload": {}}
+{"timestamp": "2026-08-13T10:00:10Z", "type": "reasoning", "payload": {"text": "I should look at the failing test first."}}
+{"timestamp": "2026-08-13T10:00:20Z", "type": "exec_command_begin", "payload": {"command": "pytest tests/unit/test_tailer.py -q", "cwd": "/home/user/project"}}
+{"timestamp": "2026-08-13T10:00:25Z", "type": "exec_command_end", "payload": {"command": "pytest tests/unit/test_tailer.py -q", "exit_code": 1, "stdout_tail": "1 failed, 4 passed", "stderr_tail": ""}}
+{"timestamp": "2026-08-13T10:00:40Z", "type": "file_change", "payload": {"path": "src/tailer.py", "change": "modified"}}
+{"timestamp": "2026-08-13T10:00:50Z", "type": "exec_command_begin", "payload": {"command": "pytest tests/unit/test_tailer.py -q", "cwd": "/home/user/project"}}
+{"timestamp": "2026-08-13T10:00:55Z", "type": "exec_command_end", "payload": {"command": "pytest tests/unit/test_tailer.py -q", "exit_code": 0, "stdout_tail": "5 passed", "stderr_tail": ""}}
+{"timestamp": "2026-08-13T10:01:00Z", "type": "agent_message", "payload": {"text": "Fixed the tailer bug; all tests pass now."}}
+{"timestamp": "2026-08-13T10:01:05Z", "type": "turn_complete", "payload": {}}

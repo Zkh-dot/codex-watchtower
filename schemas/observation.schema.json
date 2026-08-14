@@ -461,9 +461,12 @@
           "maxLength": 1000
         },
         "payload": {
-          "description": "Bounded scalar map. Nested objects and arrays are rejected so a payload cannot grow without limit; render structure into the summary instead.",
+          "description": "Bounded scalar map. Nested objects and arrays are rejected so a payload cannot grow without limit; render structure into the summary instead. Property names are length-bounded to prevent unbounded key cardinality.",
           "type": "object",
           "maxProperties": 24,
+          "propertyNames": {
+            "maxLength": 100
+          },
           "additionalProperties": {
             "description": "String, bounded integer, boolean, or null. Floating-point values are excluded because JSON gives them no serialization-length bound; render a ratio as a bounded string instead.",
             "type": [

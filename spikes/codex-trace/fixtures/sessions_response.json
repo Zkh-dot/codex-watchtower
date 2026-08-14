@@ -1,0 +1,12 @@
+{
+  "sessions": [
+    {
+      "id": "rollout-2026-08-13T10-00-00-abc123",
+      "path": "/home/user/.codex/sessions/2026/08/13/rollout-2026-08-13T10-00-00-abc123.jsonl"
+    },
+    {
+      "id": "rollout-2026-08-13T09-00-00-def456",
+      "path": "/home/user/.codex/sessions/2026/08/13/rollout-2026-08-13T09-00-00-def456.jsonl"
+    }
+  ]
+}

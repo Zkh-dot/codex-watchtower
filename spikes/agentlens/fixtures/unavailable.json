@@ -1,0 +1,8 @@
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "error": {
+    "code": -32000,
+    "message": "connection refused: no AgentLens instance listening on 127.0.0.1:4316"
+  }
+}

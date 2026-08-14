@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"sessions\": [{\"session_id\": \"rollout-2026-08-13T10-00-00-abc123\", \"updated_at\": \"2026-08-13T10:05:00Z\"}, {\"session_id\": \"rollout-2026-08-13T09-00-00-def456\", \"updated_at\": \"2026-08-13T09:30:00Z\"}]}"
+      }
+    ]
+  }
+}

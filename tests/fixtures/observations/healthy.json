@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "session": {
+    "id": "sess-1",
+    "workspace": "/home/user/project",
+    "started_at": "2026-08-13T10:00:00Z",
+    "elapsed_seconds": 120,
+    "state": "active_turn",
+    "model": "gpt-5-codex"
+  },
+  "goal": {
+    "text": "Implement incremental JSONL tailer.",
+    "expected_paths": ["src/"],
+    "forbidden_paths": ["secrets/"],
+    "acceptance_criteria": ["Tailer reads only complete lines."]
+  },
+  "window": {
+    "from_cursor": null,
+    "to_cursor": 5,
+    "opened_at": "2026-08-13T10:00:00Z",
+    "closed_at": "2026-08-13T10:02:00Z"
+  },
+  "previous_assessment": null,
+  "events": [
+    {
+      "id": "evt:1",
+      "timestamp": "2026-08-13T10:00:30Z",
+      "kind": "command",
+      "summary": "Ran `pytest tests/unit/codex/test_tailer.py`",
+      "path": null,
+      "exit_code": null,
+      "source_type": "shell",
+      "run_id": null,
+      "execution_epoch": null
+    }
+  ],
+  "signals": [],
+  "system_refs": [
+    {"id": "sys:elapsed", "summary": "Session has been active for 120 seconds."}
+  ],
+  "redactions": [],
+  "truncation": {
+    "budget_characters": 48000,
+    "used_characters": 1200,
+    "evicted": {"file_read": 0, "reasoning": 0, "command_output": 0, "events": 0}
+  }
+}
