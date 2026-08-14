@@ -801,6 +801,26 @@ class Repository:
         """Delete a reserved model-call row when the budget is exhausted."""
         self._conn.execute("DELETE FROM model_calls WHERE row_id = ?", (row_id,))
 
+    def recover_abandoned_reservations(self, *, lease_seconds: int = 300) -> int:
+        """Delete model_calls rows with finished_at=NULL that are older than the lease.
+
+        A crash, SIGKILL, or power loss after reserve_model_call() but
+        before finalize_model_call() leaves a stale row that permanently
+        consumes a ceiling slot and reserved cost. This method removes
+        those rows so the slots and budget are released (R5#1).
+
+        Returns the number of abandoned reservations recovered.
+        """
+        cursor = self._conn.execute(
+            """
+            DELETE FROM model_calls
+            WHERE finished_at IS NULL
+              AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)
+            """,
+            (f"-{lease_seconds} seconds",),
+        )
+        return cursor.rowcount or 0
+
     # --- scheduler state (R4#3) --------------------------------------
 
     def get_scheduler_state(self, session_id: str) -> dict[str, Any] | None:

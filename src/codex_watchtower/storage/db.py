@@ -85,8 +85,21 @@ def open_database(path: Path) -> sqlite3.Connection:
     Corruption is detected before the file is ever opened for writing, and
     is reported as a typed, fatal error instead of silently recreating the
     database.
+
+    After migration, abandoned model-call reservations (rows with
+    ``finished_at IS NULL`` older than 5 minutes) are recovered so stale
+    slots from a crashed process don't permanently block assessments (R5#1).
     """
     check_integrity(path)
     conn = connect(path)
     migrate(conn)
+    # Recover abandoned reservations: delete model_calls rows that were
+    # reserved but never finalized due to a crash/SIGKILL/restart.
+    conn.execute(
+        """
+        DELETE FROM model_calls
+        WHERE finished_at IS NULL
+          AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-300 seconds')
+        """
+    )
     return conn
