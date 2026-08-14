@@ -283,12 +283,23 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
                 await asyncio.to_thread(
                     _run_scheduled_luna, repo, config.luna, config.budget, owner_id
                 )
-            # Refresh heartbeat so recovery knows we're alive (R7#1).
-            repo.update_heartbeat(owner_id)
             await asyncio.sleep(poll_interval)
 
+    async def heartbeat_loop() -> None:
+        """Renew the lease independently of ingestion/model execution (R8#2).
+
+        This task refreshes the heartbeat on a fixed cadence that is
+        shorter than the recovery lease, so a long-running model call
+        (e.g., retry_budget=100 with 30s timeouts) does not cause the
+        owner to be mistaken for dead.
+        """
+        heartbeat_interval = min(60, poll_interval)
+        while True:
+            repo.update_heartbeat(owner_id)
+            await asyncio.sleep(heartbeat_interval)
+
     try:
-        await asyncio.gather(server.serve(), ingestion_loop())
+        await asyncio.gather(server.serve(), ingestion_loop(), heartbeat_loop())
     finally:
         repo.deregister_service_instance(owner_id)
 

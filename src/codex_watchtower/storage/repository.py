@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -75,27 +76,37 @@ class ProcessEvidenceRecord:
 class Repository:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
+        self._lock = threading.RLock()
 
     def begin_transaction(self) -> None:
+        """Begin a transaction. Serializes on the shared connection (R8#3)."""
+        self._lock.acquire()
         self._conn.execute("BEGIN")
 
     def commit_transaction(self) -> None:
         self._conn.execute("COMMIT")
+        self._lock.release()
 
     def rollback_transaction(self) -> None:
         self._conn.execute("ROLLBACK")
+        self._lock.release()
 
     @contextmanager
     def transaction(self) -> Any:
-        """Context manager: commits on success, rolls back on any exception."""
-        self._conn.execute("BEGIN")
-        try:
-            yield
-        except Exception:
-            self._conn.execute("ROLLBACK")
-            raise
-        else:
-            self._conn.execute("COMMIT")
+        """Context manager: commits on success, rolls back on any exception.
+
+        Serializes access to the shared connection so concurrent threads
+        (API handler + scheduled Luna) cannot overlap transactions (R8#3).
+        """
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                yield
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+            else:
+                self._conn.execute("COMMIT")
 
     @property
     def connection(self) -> sqlite3.Connection:

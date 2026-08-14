@@ -58,17 +58,83 @@ def check_integrity(path: Path) -> None:
         )
 
 
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split a migration script into individual statements.
+
+    Handles ``--`` line comments and ``/* */`` block comments.
+    Splits on semicolons that are not inside single-quoted strings.
+    Empty/whitespace-only statements are discarded.
+    """
+    statements: list[str] = []
+    current: list[str] = []
+    in_string = False
+    in_line_comment = False
+    in_block_comment = False
+    i = 0
+    while i < len(sql):
+        char = sql[i]
+        # Handle line comments
+        if (
+            not in_string
+            and not in_block_comment
+            and char == "-"
+            and i + 1 < len(sql)
+            and sql[i + 1] == "-"
+        ):
+            in_line_comment = True
+            current.append(char)
+            i += 1
+            continue
+        if in_line_comment:
+            current.append(char)
+            if char == "\n":
+                in_line_comment = False
+            i += 1
+            continue
+        # Handle block comments
+        if (
+            not in_string
+            and not in_line_comment
+            and char == "/"
+            and i + 1 < len(sql)
+            and sql[i + 1] == "*"
+        ):
+            in_block_comment = True
+            current.append(char)
+            i += 1
+            continue
+        if in_block_comment:
+            current.append(char)
+            if char == "*" and i + 1 < len(sql) and sql[i + 1] == "/":
+                current.append(sql[i + 1])
+                i += 2
+                in_block_comment = False
+                continue
+            i += 1
+            continue
+        # Normal character
+        current.append(char)
+        if char == "'":
+            in_string = not in_string
+        elif char == ";" and not in_string:
+            stmt = "".join(current).strip()
+            if stmt and stmt != ";":
+                statements.append(stmt)
+            current = []
+        i += 1
+    remainder = "".join(current).strip()
+    if remainder:
+        statements.append(remainder)
+    return statements
+
+
 def migrate(conn: sqlite3.Connection) -> None:
     """Apply every migration under migrations/ that has not been recorded yet.
 
-    Each migration is idempotent (CREATE TABLE/INDEX IF NOT EXISTS) and the
-    applied set is also tracked explicitly, so running this twice against
-    the same database is a no-op the second time either way.
-
-    ``ALTER TABLE`` migrations are wrapped in a retry: if the script fails
-    with a "duplicate column name" error (meaning a previous run executed
-    the ALTER but crashed before recording it), the migration is treated
-    as already applied (R7#2).
+    Each migration is applied atomically: all statements in the migration
+    plus the marker insert run in a single transaction, so a crash
+    between statements rolls back the entire migration and it is retried
+    cleanly on the next startup (R8#1).
     """
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations ("
@@ -80,16 +146,18 @@ def migrate(conn: sqlite3.Connection) -> None:
     for path in _migration_files():
         if path.name in applied:
             continue
+        statements = _split_sql_statements(path.read_text())
+        # Execute the migration and its marker in a single transaction
+        # so a crash at any point rolls back the whole migration (R8#1).
+        conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.executescript(path.read_text())
-        except sqlite3.OperationalError as exc:
-            if "duplicate column name" in str(exc):
-                # The ALTER TABLE already ran in a previous interrupted
-                # attempt. Treat as applied (R7#2).
-                pass
-            else:
-                raise
-        conn.execute("INSERT INTO schema_migrations (filename) VALUES (?)", (path.name,))
+            for stmt in statements:
+                conn.execute(stmt)
+            conn.execute("INSERT INTO schema_migrations (filename) VALUES (?)", (path.name,))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
 
 def open_database(path: Path) -> sqlite3.Connection:
