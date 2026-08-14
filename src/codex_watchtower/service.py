@@ -279,12 +279,21 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
     uv_config = uvicorn.Config(app, host=config.bind.host, port=config.bind.port, log_level="info")
     server = uvicorn.Server(uv_config)
 
+    # Dedicated executor so we can wait for all worker threads to finish
+    # before releasing the lease (R15#1). asyncio.to_thread uses the
+    # default executor which cannot be shut down independently.
+    import concurrent.futures
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+    loop = asyncio.get_event_loop()
+
     async def ingestion_loop() -> None:
         while True:
-            await asyncio.to_thread(ingestion.poll_once)
+            await loop.run_in_executor(executor, ingestion.poll_once)
             # Dispatch notifications for sessions that need attention.
             if telegram_notifier is not None:
-                await asyncio.to_thread(
+                await loop.run_in_executor(
+                    executor,
                     _dispatch_notifications,
                     repo,
                     telegram_notifier,
@@ -292,8 +301,8 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
                 )
             # Run periodic Luna assessments if configured.
             if config.luna is not None:
-                await asyncio.to_thread(
-                    _run_scheduled_luna, repo, config.luna, config.budget, owner_id
+                await loop.run_in_executor(
+                    executor, _run_scheduled_luna, repo, config.luna, config.budget, owner_id
                 )
             await asyncio.sleep(poll_interval)
 
@@ -313,9 +322,24 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
             lease_file.touch()
             await asyncio.sleep(heartbeat_interval)
 
+    tasks = [
+        asyncio.create_task(server.serve()),
+        asyncio.create_task(ingestion_loop()),
+        asyncio.create_task(heartbeat_loop()),
+    ]
     try:
-        await asyncio.gather(server.serve(), ingestion_loop(), heartbeat_loop())
+        await asyncio.gather(*tasks)
     finally:
+        # Cancel all tasks (R15#1).
+        for t in tasks:
+            t.cancel()
+        # Wait for tasks to acknowledge cancellation.
+        await asyncio.gather(*tasks, return_exceptions=True)
+        # Wait for all worker threads to finish before releasing the
+        # lease. This ensures a model call running in a worker thread
+        # completes (or the connection is torn down) before another
+        # serve instance can acquire the lease and reclaim reservations.
+        executor.shutdown(wait=True)
         os.close(lease_fd)
         lease_file.unlink(missing_ok=True)
 
