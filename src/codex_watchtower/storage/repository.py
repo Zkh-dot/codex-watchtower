@@ -902,11 +902,19 @@ class Repository:
             )
             return cursor.rowcount or 0
 
+        # Select all unfinished reservations. For rows with an owner_id,
+        # the flock is the authoritative liveness check and is tried
+        # immediately, regardless of age (R14#1). For legacy ownerless
+        # rows (owner_id IS NULL), the age gate is retained as a
+        # conservative fallback.
         stale_rows = self._conn.execute(
             """
             SELECT row_id, owner_id FROM model_calls
             WHERE finished_at IS NULL
-              AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)
+              AND (
+                    owner_id IS NOT NULL
+                    OR started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)
+                  )
             """,
             (f"-{lease_seconds} seconds",),
         ).fetchall()
