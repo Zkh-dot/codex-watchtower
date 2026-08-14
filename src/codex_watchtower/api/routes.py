@@ -188,6 +188,7 @@ def post_assess(
                 budget,
                 luna_assessment,
                 escalation_reason="operator_requested",
+                owner_id=getattr(request.app.state, "owner_id", None),
             )
 
             if outcome.budget_exhausted:

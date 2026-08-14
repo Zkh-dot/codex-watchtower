@@ -225,12 +225,23 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
     conn = db.open_database(config.state_dir / "state.db")
     repo = Repository(conn)
 
+    # Generate a unique owner identity for this serve process (R7#1).
+    # Using a UUID instead of PID avoids the PID-reuse race where a
+    # restarted process gets the same PID as a crashed owner.
+    import uuid
+
+    owner_id = str(uuid.uuid4())
+    owner_pid = os.getpid()
+
     # Recover abandoned model-call reservations from a previous crashed
     # serve process. This runs only in the serve command, not in
     # open_database(), so inspect/doctor cannot reclaim a live serve
-    # process's reservations (R6#1). Only reservations whose owner_pid
-    # is provably dead are reclaimed.
+    # process's reservations (R6#1). Only reservations whose owner_id
+    # is not registered (or has a stale heartbeat) are reclaimed.
     repo.recover_abandoned_reservations()
+
+    # Register this serve instance so recovery can tell we're alive.
+    repo.register_service_instance(owner_id, owner_pid)
 
     ingestion = IngestionService(config.sessions_root, repo)
 
@@ -252,6 +263,7 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
     app.state.luna_config = config.luna
     app.state.terra_config = config.terra
     app.state.budget = config.budget
+    app.state.owner_id = owner_id
     uv_config = uvicorn.Config(app, host=config.bind.host, port=config.bind.port, log_level="info")
     server = uvicorn.Server(uv_config)
 
@@ -268,16 +280,24 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
                 )
             # Run periodic Luna assessments if configured.
             if config.luna is not None:
-                await asyncio.to_thread(_run_scheduled_luna, repo, config.luna, config.budget)
+                await asyncio.to_thread(
+                    _run_scheduled_luna, repo, config.luna, config.budget, owner_id
+                )
+            # Refresh heartbeat so recovery knows we're alive (R7#1).
+            repo.update_heartbeat(owner_id)
             await asyncio.sleep(poll_interval)
 
-    await asyncio.gather(server.serve(), ingestion_loop())
+    try:
+        await asyncio.gather(server.serve(), ingestion_loop())
+    finally:
+        repo.deregister_service_instance(owner_id)
 
 
 def _run_scheduled_luna(
     repo: Repository,
     luna_config: ModelEndpointConfig,
     budget: BudgetConfig,
+    owner_id: str | None = None,
 ) -> None:
     """Run scheduled Luna assessments for sessions that need it.
 
@@ -365,7 +385,9 @@ def _run_scheduled_luna(
         if not decision.should_assess:
             continue
 
-        outcome = run_luna_assessment(repo, session_id, luna_config, budget, now=now)
+        outcome = run_luna_assessment(
+            repo, session_id, luna_config, budget, now=now, owner_id=owner_id
+        )
         if outcome.assessment is not None or outcome.failure_reason is not None:
             reconcile_with_assessment(repo, session_id, outcome.assessment, now=now)
 

@@ -64,6 +64,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     Each migration is idempotent (CREATE TABLE/INDEX IF NOT EXISTS) and the
     applied set is also tracked explicitly, so running this twice against
     the same database is a no-op the second time either way.
+
+    ``ALTER TABLE`` migrations are wrapped in a retry: if the script fails
+    with a "duplicate column name" error (meaning a previous run executed
+    the ALTER but crashed before recording it), the migration is treated
+    as already applied (R7#2).
     """
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations ("
@@ -75,7 +80,15 @@ def migrate(conn: sqlite3.Connection) -> None:
     for path in _migration_files():
         if path.name in applied:
             continue
-        conn.executescript(path.read_text())
+        try:
+            conn.executescript(path.read_text())
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" in str(exc):
+                # The ALTER TABLE already ran in a previous interrupted
+                # attempt. Treat as applied (R7#2).
+                pass
+            else:
+                raise
         conn.execute("INSERT INTO schema_migrations (filename) VALUES (?)", (path.name,))
 
 

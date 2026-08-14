@@ -745,21 +745,22 @@ class Repository:
         started_at: str,
         input_characters: int | None,
         estimated_cost_cents: int | None = None,
-        owner_pid: int | None = None,
+        owner_id: str | None = None,
     ) -> int:
         """Atomically reserve a model-call slot by inserting a pending row.
 
         The reservation counts toward the ceiling immediately so
         concurrent callers see it (R3#3). The estimated cost is stored
         in the row so ``sum_daily_cost_cents`` includes it (R4#2).
-        ``owner_pid`` identifies the process that made the reservation
-        so recovery can verify the owner is dead before reclaiming (R6#1).
+        ``owner_id`` is a UUID identifying the serve process that made
+        the reservation so recovery can verify the owner is dead via
+        the service_instances table before reclaiming (R7#1).
         """
         cursor = self._conn.execute(
             """
             INSERT INTO model_calls (
                 session_id, assessed_by, started_at, finished_at, latency_ms,
-                input_characters, success, error_class, estimated_cost_cents, owner_pid
+                input_characters, success, error_class, estimated_cost_cents, owner_id
             ) VALUES (?, ?, ?, NULL, NULL, ?, 0, NULL, ?, ?)
             """,
             (
@@ -768,7 +769,7 @@ class Repository:
                 started_at,
                 input_characters,
                 estimated_cost_cents,
-                owner_pid,
+                owner_id,
             ),
         )
         assert cursor.lastrowid is not None
@@ -809,49 +810,85 @@ class Repository:
         """Delete a reserved model-call row when the budget is exhausted."""
         self._conn.execute("DELETE FROM model_calls WHERE row_id = ?", (row_id,))
 
+    def register_service_instance(self, owner_id: str, pid: int) -> None:
+        """Register a serve process in the service_instances table (R7#1).
+
+        Each serve instance generates a UUID at startup and registers
+        itself here. The heartbeat is updated periodically so recovery
+        can distinguish live owners from dead ones.
+        """
+        self._conn.execute(
+            """
+            INSERT INTO service_instances (owner_id, pid, started_at, last_heartbeat)
+            VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            ON CONFLICT(owner_id) DO UPDATE SET
+                last_heartbeat = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            """,
+            (owner_id, pid),
+        )
+
+    def update_heartbeat(self, owner_id: str) -> None:
+        """Refresh the heartbeat for a registered service instance (R7#1)."""
+        self._conn.execute(
+            "UPDATE service_instances"
+            " SET last_heartbeat = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+            " WHERE owner_id = ?",
+            (owner_id,),
+        )
+
+    def deregister_service_instance(self, owner_id: str) -> None:
+        """Remove a service instance on clean shutdown (R7#1)."""
+        self._conn.execute(
+            "DELETE FROM service_instances WHERE owner_id = ?",
+            (owner_id,),
+        )
+
     def recover_abandoned_reservations(self, *, lease_seconds: int = 300) -> int:
-        """Delete model_calls rows with finished_at=NULL that are older than the lease
-        AND whose owner process is provably dead.
+        """Delete model_calls rows with finished_at=NULL whose owner is provably dead.
 
         A crash, SIGKILL, or power loss after reserve_model_call() but
         before finalize_model_call() leaves a stale row that permanently
         consumes a ceiling slot and reserved cost. This method removes
         those rows so the slots and budget are released (R5#1).
 
-        Only rows whose ``owner_pid`` is no longer alive (or is NULL and
-        older than the lease) are reclaimed, so a live process opening
-        the database from ``inspect`` or ``doctor`` cannot release a
-        reservation owned by a running ``serve`` process (R6#1).
+        An owner is considered dead if its ``owner_id`` is not present in
+        ``service_instances`` (crashed before registering, or deregistered
+        on clean shutdown), or if its heartbeat in
+        ``service_instances`` is older than the lease (crashed after
+        registering but before deregistering). This is immune to PID
+        reuse because each serve instance gets a fresh UUID (R7#1).
+
+        This method must only be called from the ``serve`` startup, not
+        from ``open_database()``, so ``inspect``/``doctor`` cannot
+        reclaim a live serve process's reservations (R6#1).
 
         Returns the number of abandoned reservations recovered.
         """
-        import os
-        import signal
-
-        stale_rows = self._conn.execute(
+        # First, purge service_instances rows with stale heartbeats.
+        self._conn.execute(
             """
-            SELECT row_id, owner_pid FROM model_calls
-            WHERE finished_at IS NULL
-              AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)
+            DELETE FROM service_instances
+            WHERE last_heartbeat < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)
             """,
             (f"-{lease_seconds} seconds",),
-        ).fetchall()
+        )
 
-        recovered = 0
-        for row in stale_rows:
-            row_id = row["row_id"]
-            pid = row["owner_pid"]
-            if pid is not None:
-                try:
-                    os.kill(pid, signal.SIG_DUMMY if hasattr(signal, "SIG_DUMMY") else 0)
-                    # Process is still alive — do not reclaim.
-                    continue
-                except (ProcessLookupError, PermissionError, OSError):
-                    # Process is dead — safe to reclaim.
-                    pass
-            self._conn.execute("DELETE FROM model_calls WHERE row_id = ?", (row_id,))
-            recovered += 1
-        return recovered
+        # Then delete stale reservations whose owner_id is no longer
+        # registered (or is NULL, for rows created before migration 004).
+        cursor = self._conn.execute(
+            """
+            DELETE FROM model_calls
+            WHERE finished_at IS NULL
+              AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)
+              AND (
+                    owner_id IS NULL
+                    OR owner_id NOT IN (SELECT owner_id FROM service_instances)
+                  )
+            """,
+            (f"-{lease_seconds} seconds",),
+        )
+        return cursor.rowcount or 0
 
     # --- scheduler state (R4#3) --------------------------------------
 

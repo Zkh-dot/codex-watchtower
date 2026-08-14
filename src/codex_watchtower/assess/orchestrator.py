@@ -164,6 +164,7 @@ def _reserve_and_check_budget(
     *,
     started_at: str,
     input_characters: int,
+    owner_id: str | None = None,
 ) -> tuple[int | None, str | None]:
     """Atomically reserve a model-call slot and check ceilings.
 
@@ -175,9 +176,6 @@ def _reserve_and_check_budget(
     If row_id is not None, the caller must finalize or cancel it.
     """
     estimated = _estimate_cost_cents(input_characters, assessed_by)
-    import os
-
-    owner_pid = os.getpid()
     repo.begin_transaction()
     try:
         row_id = repo.reserve_model_call(
@@ -186,7 +184,7 @@ def _reserve_and_check_budget(
             started_at=started_at,
             input_characters=input_characters,
             estimated_cost_cents=estimated,
-            owner_pid=owner_pid,
+            owner_id=owner_id,
         )
         if budget.per_session_assessment_ceiling is not None:
             count = repo.count_model_calls_for_session(session_id)
@@ -242,6 +240,7 @@ def run_luna_assessment(
     *,
     http_client: httpx.Client | None = None,
     now: datetime | None = None,
+    owner_id: str | None = None,
 ) -> AssessmentOutcome:
     """Run a Luna assessment with atomic budget enforcement and persistence."""
     now = now or datetime.now(UTC)
@@ -262,7 +261,13 @@ def run_luna_assessment(
     input_chars = len(observation.model_dump_json())
 
     row_id, budget_reason = _reserve_and_check_budget(
-        repo, session_id, "luna", budget, started_at=started_at, input_characters=input_chars
+        repo,
+        session_id,
+        "luna",
+        budget,
+        started_at=started_at,
+        input_characters=input_chars,
+        owner_id=owner_id,
     )
     if budget_reason is not None:
         return AssessmentOutcome(
@@ -314,6 +319,7 @@ def run_terra_assessment(
     escalation_reason: str = "operator_requested",
     http_client: httpx.Client | None = None,
     now: datetime | None = None,
+    owner_id: str | None = None,
 ) -> AssessmentOutcome:
     """Run a Terra escalation with atomic budget enforcement and persistence."""
     now = now or datetime.now(UTC)
@@ -334,7 +340,13 @@ def run_terra_assessment(
     input_chars = len(observation.model_dump_json())
 
     row_id, budget_reason = _reserve_and_check_budget(
-        repo, session_id, "terra", budget, started_at=started_at, input_characters=input_chars
+        repo,
+        session_id,
+        "terra",
+        budget,
+        started_at=started_at,
+        input_characters=input_chars,
+        owner_id=owner_id,
     )
     if budget_reason is not None:
         return AssessmentOutcome(
