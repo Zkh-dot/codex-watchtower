@@ -175,6 +175,9 @@ def _reserve_and_check_budget(
     If row_id is not None, the caller must finalize or cancel it.
     """
     estimated = _estimate_cost_cents(input_characters, assessed_by)
+    import os
+
+    owner_pid = os.getpid()
     repo.begin_transaction()
     try:
         row_id = repo.reserve_model_call(
@@ -183,6 +186,7 @@ def _reserve_and_check_budget(
             started_at=started_at,
             input_characters=input_characters,
             estimated_cost_cents=estimated,
+            owner_pid=owner_pid,
         )
         if budget.per_session_assessment_ceiling is not None:
             count = repo.count_model_calls_for_session(session_id)

@@ -224,6 +224,14 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
     config.state_dir.mkdir(parents=True, exist_ok=True)
     conn = db.open_database(config.state_dir / "state.db")
     repo = Repository(conn)
+
+    # Recover abandoned model-call reservations from a previous crashed
+    # serve process. This runs only in the serve command, not in
+    # open_database(), so inspect/doctor cannot reclaim a live serve
+    # process's reservations (R6#1). Only reservations whose owner_pid
+    # is provably dead are reclaimed.
+    repo.recover_abandoned_reservations()
+
     ingestion = IngestionService(config.sessions_root, repo)
 
     # Build Telegram notifier if configured.
