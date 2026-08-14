@@ -300,10 +300,28 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
         Uses a dedicated autocommit connection (R9#1) so heartbeat writes
         commit immediately and are visible to other connections even
         while an ingestion transaction is open.
+
+        Retries on ``database is locked`` with bounded backoff so a long
+        ingestion write transaction cannot crash the service (R10#1).
+        The heartbeat interval (60s) is well below the recovery lease
+        (300s), so a few missed cycles do not cause a live owner to be
+        reclaimed.
         """
+        import sqlite3 as _sqlite3
+
         heartbeat_interval = min(60, poll_interval)
         while True:
-            lease_repo.update_heartbeat(owner_id)
+            for attempt in range(3):
+                try:
+                    lease_repo.update_heartbeat(owner_id)
+                    break
+                except _sqlite3.OperationalError as exc:
+                    if "database is locked" in str(exc) and attempt < 2:
+                        await asyncio.sleep(1.0 * (attempt + 1))
+                        continue
+                    # On the final attempt or non-lock errors, log and
+                    # move on — the next cycle will retry.
+                    break
             await asyncio.sleep(heartbeat_interval)
 
     try:
