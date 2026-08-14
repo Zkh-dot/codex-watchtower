@@ -225,6 +225,14 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
     conn = db.open_database(config.state_dir / "state.db")
     repo = Repository(conn)
 
+    # Dedicated autocommit connection for lease/heartbeat operations.
+    # This ensures heartbeat writes commit independently of ingestion
+    # transactions, so a long ingestion transaction cannot cause the
+    # heartbeat to be invisible to a second connection or lost on
+    # rollback (R9#1).
+    lease_conn = db.connect(config.state_dir / "state.db")
+    lease_repo = Repository(lease_conn)
+
     # Generate a unique owner identity for this serve process (R7#1).
     # Using a UUID instead of PID avoids the PID-reuse race where a
     # restarted process gets the same PID as a crashed owner.
@@ -241,7 +249,8 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
     repo.recover_abandoned_reservations()
 
     # Register this serve instance so recovery can tell we're alive.
-    repo.register_service_instance(owner_id, owner_pid)
+    # Uses the dedicated lease connection (R9#1).
+    lease_repo.register_service_instance(owner_id, owner_pid)
 
     ingestion = IngestionService(config.sessions_root, repo)
 
@@ -288,20 +297,20 @@ async def _run_server_and_ingestion(config: WatchtowerConfig, *, poll_interval: 
     async def heartbeat_loop() -> None:
         """Renew the lease independently of ingestion/model execution (R8#2).
 
-        This task refreshes the heartbeat on a fixed cadence that is
-        shorter than the recovery lease, so a long-running model call
-        (e.g., retry_budget=100 with 30s timeouts) does not cause the
-        owner to be mistaken for dead.
+        Uses a dedicated autocommit connection (R9#1) so heartbeat writes
+        commit immediately and are visible to other connections even
+        while an ingestion transaction is open.
         """
         heartbeat_interval = min(60, poll_interval)
         while True:
-            repo.update_heartbeat(owner_id)
+            lease_repo.update_heartbeat(owner_id)
             await asyncio.sleep(heartbeat_interval)
 
     try:
         await asyncio.gather(server.serve(), ingestion_loop(), heartbeat_loop())
     finally:
-        repo.deregister_service_instance(owner_id)
+        lease_repo.deregister_service_instance(owner_id)
+        lease_conn.close()
 
 
 def _run_scheduled_luna(
@@ -402,15 +411,19 @@ def _run_scheduled_luna(
         if outcome.assessment is not None or outcome.failure_reason is not None:
             reconcile_with_assessment(repo, session_id, outcome.assessment, now=now)
 
-        # Persist scheduler state snapshot for the next poll's comparison.
-        repo.save_scheduler_state(
-            session_id,
-            last_assessed_at=now.isoformat(),
-            last_lifecycle_state=state_enum.value,
-            last_signal_fingerprint=fingerprint,
-            last_material_progress_cursor=None,
-            in_progress=False,
-        )
+        # Persist scheduler state snapshot only after a completed assessment
+        # (R9#2). On failure (transport error, budget exhaustion, etc.),
+        # leave the prior snapshot unchanged so the session remains due
+        # for retry on the next poll.
+        if outcome.assessment is not None:
+            repo.save_scheduler_state(
+                session_id,
+                last_assessed_at=now.isoformat(),
+                last_lifecycle_state=state_enum.value,
+                last_signal_fingerprint=fingerprint,
+                last_material_progress_cursor=None,
+                in_progress=False,
+            )
 
 
 def _dispatch_notifications(repo: Repository, notifier: object, chat_ids: list[str]) -> None:
