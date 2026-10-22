@@ -49,6 +49,7 @@ async def serve_report(
     engine: ReportEngine, workspace: ReportWorkspace | None = None, *, port: int = 0
 ) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("127.0.0.1", port))
         sock.listen(128)
         server = uvicorn.Server(

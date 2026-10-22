@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -153,3 +154,8 @@ def test_report_command_http_sse_export_and_shutdown(tmp_path, unused_tcp_port, 
                 process.wait(timeout=5)
         assert process.returncode == 0
         assert output.exists()
+        if fixed_port:
+            # Reuse the listener immediately while the closed SSE connection is in TIME_WAIT.
+            with socket.socket() as listener:
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind(("127.0.0.1", port))
