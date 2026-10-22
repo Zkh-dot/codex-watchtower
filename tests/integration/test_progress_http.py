@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 
 import httpx
 
@@ -16,7 +17,15 @@ from tests.unit.test_progress_report import FIXTURE, report_for
 
 def test_report_command_http_sse_export_and_shutdown(tmp_path):
     source = tmp_path / "rollout.jsonl"
-    source.write_bytes(FIXTURE.read_bytes())
+    records = [json.loads(line) for line in FIXTURE.read_text().splitlines()]
+    records[0]["payload"]["timestamp"] = datetime.now(UTC).isoformat()
+    source.write_text("".join(json.dumps(record) + "\n" for record in records))
+    folder = tmp_path / "2026/10/22"
+    folder.mkdir(parents=True)
+    second = folder / "rollout-second.jsonl"
+    records[0]["payload"]["id"] = "second-session"
+    records[0]["payload"]["cwd"] = "/home/user/search-demo"
+    second.write_text("".join(json.dumps(record) + "\n" for record in records))
     config = tmp_path / "config.toml"
     state = tmp_path / "state"
     config.write_text(f'sessions_root="{tmp_path}"\nstate_dir="{state}"\n')
@@ -95,6 +104,30 @@ def test_report_command_http_sse_export_and_shutdown(tmp_path):
                                 assert json.loads(line[6:])["version"] == 1
                                 break
                 assert client.get("/rollout.jsonl").status_code == 404
+                rows = client.get("/sessions", params={"q": "search-demo"}).json()
+                assert len(rows) == 1 and rows[0]["session_id"] == "second-session"
+                with client.stream("GET", "/events") as stream:
+                    lines = stream.iter_lines()
+                    for line in lines:
+                        if line.startswith("data: "):
+                            assert json.loads(line[6:])["session_id"] == snapshot["session_id"]
+                            break
+                    selected = client.post("/session", json={"key": rows[0]["key"]}).json()
+                    assert selected["session_id"] == "second-session"
+                    assert selected["selection_revision"] == 1
+                    for line in lines:
+                        if line.startswith("data: "):
+                            update = json.loads(line[6:])
+                            if update["session_id"] == "second-session":
+                                assert update["selection_revision"] == 1
+                                break
+                original = next(
+                    row
+                    for row in client.get("/sessions").json()
+                    if row["session_id"] == snapshot["session_id"]
+                )
+                restored = client.post("/session", json={"key": original["key"]}).json()
+                assert restored["version"] == 1 and restored["selection_revision"] == 2
                 # A browser keeps SSE open; it must not prevent Ctrl+C shutdown.
                 with client.stream("GET", "/events") as stream:
                     assert stream.status_code == 200

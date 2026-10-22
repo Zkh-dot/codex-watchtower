@@ -149,6 +149,12 @@ as historical; they are not presented as current work or changed to 100% complet
 For a completed goal, the percentage and ETA cards are removed entirely. Prior
 estimates remain only in a collapsed history labelled with the covered event date.
 
+The page header searches local sessions by folder, full or partial ID, and title.
+Results include only sessions started in the last seven days, up to 20 matches.
+Selecting one switches the report in all connected tabs without reloading. Each
+session keeps its own checkpoint and report; only the selected session is analyzed.
+An already open report remains available after its session ages out of search.
+
 The first analysis starts immediately. Initial history is folded in bounded batches;
 a partial report shows its coverage. After initial catch-up, analysis runs every
 300–600 seconds (default 300), only when new events exist. One analysis runs at a

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import fcntl
-import json
 import socket
 import sys
 from pathlib import Path
@@ -14,31 +12,10 @@ import uvicorn
 
 from codex_watchtower.codex.discovery import discover_sessions
 from codex_watchtower.config import WatchtowerConfig
-from codex_watchtower.privacy.redact import redact_text
 from codex_watchtower.report.engine import ReportEngine
 from codex_watchtower.report.web import create_report_app
+from codex_watchtower.report.workspace import ReportWorkspace, session_title
 from codex_watchtower.service import _load_config_or_none, resolve_config_path
-from codex_watchtower.storage.db import open_database
-from codex_watchtower.storage.repository import Repository
-
-
-def session_title(path: Path) -> str:
-    with path.open(encoding="utf-8", errors="replace") as stream:
-        for _, line in zip(range(100), stream, strict=False):
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            p = record.get("payload", {}) if isinstance(record, dict) else {}
-            if not isinstance(p, dict) or p.get("role") != "user":
-                continue
-            content = p.get("content", [])
-            if not isinstance(content, list):
-                continue
-            text = " ".join(str(c.get("text", "")) for c in content if isinstance(c, dict))
-            if text and not text.startswith(("# AGENTS", "<environment_context>", "<skill>")):
-                return redact_text(text).text.replace("\n", " ")[:100]
-    return "без названия"
 
 
 def select_source(args: argparse.Namespace, root: Path) -> Path:
@@ -68,13 +45,13 @@ def select_source(args: argparse.Namespace, root: Path) -> Path:
     return sessions[index].path.absolute()
 
 
-async def serve_report(engine: ReportEngine) -> None:
+async def serve_report(engine: ReportEngine, workspace: ReportWorkspace | None = None) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         sock.listen(128)
         server = uvicorn.Server(
             uvicorn.Config(
-                create_report_app(engine),
+                create_report_app(engine, workspace=workspace),
                 log_level="warning",
                 access_log=False,
                 timeout_graceful_shutdown=3,
@@ -88,7 +65,7 @@ async def serve_report(engine: ReportEngine) -> None:
             raise RuntimeError("report HTTP server did not start")
         print(f"Report: http://127.0.0.1:{sock.getsockname()[1]}/", flush=True)
         print(f"HTML: {engine.output}", flush=True)
-        watching = asyncio.create_task(engine.watch())
+        watching = asyncio.create_task(workspace.watch() if workspace else engine.watch())
         try:
             done, _ = await asyncio.wait({serving, watching}, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
@@ -116,36 +93,20 @@ def report_main(args: argparse.Namespace) -> int:
         if not 300 <= args.interval <= 600:
             raise ValueError("--interval must be between 300 and 600 seconds")
         source = select_source(args, config.sessions_root)
-        # A separate database avoids consuming the existing serve mode's ingestion cursor.
-        state = config.state_dir / "progress"
-        state.mkdir(parents=True, exist_ok=True, mode=0o700)
-        import hashlib
-
-        name = hashlib.sha256(str(source).encode()).hexdigest()[:24]
-        with (state / f"{name}.lock").open("a") as lock:
-            try:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise ValueError("a report process is already observing this source") from exc
-            conn = open_database(state / f"{name}.sqlite3")
-            try:
-                engine = ReportEngine(
-                    Repository(conn),
-                    source,
-                    Path(args.output).expanduser(),
-                    interval=args.interval,
-                    model=args.model,
-                )
-                # Refuse to overwrite the database, lock, source, or config via --output.
-                output = engine.output.resolve()
-                if output.is_relative_to(state.resolve()) or (
-                    args.config and output == Path(args.config).expanduser().resolve()
-                ):
-                    raise ValueError("output must be outside the state directory and config")
-                engine.export()
-                asyncio.run(serve_report(engine))
-            finally:
-                conn.close()
+        workspace = ReportWorkspace(
+            source,
+            config.sessions_root,
+            config.state_dir / "progress",
+            Path(args.output).expanduser(),
+            interval=args.interval,
+            model=args.model,
+            config_path=Path(args.config).expanduser() if args.config else None,
+        )
+        try:
+            workspace.engine.export()
+            asyncio.run(serve_report(workspace.engine, workspace))
+        finally:
+            workspace.close()
     except KeyboardInterrupt:
         return 0
     except (OSError, ValueError, RuntimeError) as exc:

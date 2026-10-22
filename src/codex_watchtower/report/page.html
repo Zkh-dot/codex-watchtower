@@ -146,6 +146,58 @@
     .meta-line .session {
       margin-left: auto;
     }
+    [hidden] {
+      display: none !important;
+    }
+    .session-search {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 12px;
+    }
+    input,
+    button {
+      font: inherit;
+      color: var(--text);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      min-height: 44px;
+      padding: 8px 12px;
+    }
+    input {
+      min-width: 0;
+      flex: 1;
+    }
+    button {
+      cursor: pointer;
+    }
+    button:hover,
+    button:focus-visible,
+    input:focus-visible {
+      border-color: var(--accent);
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: wait;
+    }
+    #session-results {
+      max-height: 340px;
+      overflow: auto;
+      margin-top: 8px;
+    }
+    .session-result {
+      display: block;
+      width: 100%;
+      text-align: left;
+      margin-bottom: 4px;
+      overflow-wrap: anywhere;
+    }
+    .session-result small {
+      display: block;
+    }
     .compact-note {
       font-size: 12px;
     }
@@ -226,6 +278,25 @@
       <span id="connection" class="badge">Сохранённый снимок</span
       ><span id="freshness" class="badge"></span>
     </div>
+    <section id="session-picker" hidden aria-label="Выбор сессии">
+      <small id="selected-session"></small>
+      <form id="session-form" class="session-search">
+        <label for="session-search">Сессия</label>
+        <input
+          id="session-search"
+          type="search"
+          maxlength="120"
+          placeholder="Папка, ID или заголовок…"
+          autocomplete="off"
+          aria-controls="session-results"
+        />
+        <button type="submit">Найти</button>
+      </form>
+      <small id="session-search-status" role="status"
+        >Выбор переключает анализ во всех вкладках · Codex CLI</small
+      >
+      <div id="session-results" hidden></div>
+    </section>
   </header>
   <main id="app" aria-live="polite"></main>
   <noscript
@@ -252,7 +323,8 @@
     );
     let state = initial,
       previousSignature = "",
-      lastVersion = 0;
+      lastVersion = 0,
+      lastSelectionRevision = -1;
     const labels = {
       pending: "○ Ожидает",
       in_progress: "▶ В работе",
@@ -558,16 +630,37 @@
       return n;
     }
     function render(next) {
+      const revision = next.selection_revision ?? 0;
+      if (revision < lastSelectionRevision) return;
+      const switched =
+        lastSelectionRevision >= 0 && revision > lastSelectionRevision;
+      if (revision > lastSelectionRevision) {
+        lastSelectionRevision = revision;
+        lastVersion = 0;
+        previousSignature = "";
+      }
       if (next.version < lastVersion) return;
       const signature = JSON.stringify(next);
       if (signature === previousSignature) return;
       previousSignature = signature;
       lastVersion = next.version;
       state = next;
+      const selectedSession = document.getElementById("selected-session");
+      if (selectedSession)
+        selectedSession.textContent = [
+          state.session_workspace,
+          state.session_title?.slice(0, 120),
+        ]
+          .filter(Boolean)
+          .join(" · ");
       const opened = new Set(
-          [...app.querySelectorAll("details[open]")].map((x) => x.dataset.key),
+          switched
+            ? []
+            : [...app.querySelectorAll("details[open]")].map(
+                (x) => x.dataset.key,
+              ),
         ),
-        scroll = window.scrollY;
+        scroll = switched ? 0 : window.scrollY;
       const root = el("div", undefined, "grid");
       const meta = el("section", undefined, "card full");
       const line = el("div", undefined, "meta-line");
@@ -761,6 +854,7 @@
     render(initial);
     setInterval(freshness, 30000);
     if (location.protocol === "http:" || location.protocol === "https:") {
+      if (initial.session_picker) setupSessionPicker();
       const stream = new EventSource("/events");
       stream.onopen = () => {
         connection.textContent = "● Подключено";
@@ -778,6 +872,95 @@
           connection.className = "badge error";
         }
       };
+    }
+    function setupSessionPicker() {
+      const picker = document.getElementById("session-picker"),
+        form = document.getElementById("session-form"),
+        input = document.getElementById("session-search"),
+        results = document.getElementById("session-results"),
+        status = document.getElementById("session-search-status");
+      picker.hidden = false;
+      let timer,
+        requestId = 0,
+        switching = false;
+      async function search() {
+        if (switching) return;
+        const id = ++requestId;
+        status.textContent = "Поиск…";
+        try {
+          const response = await fetch(
+            "/sessions?q=" + encodeURIComponent(input.value),
+          );
+          if (!response.ok) throw new Error();
+          const rows = await response.json();
+          if (id !== requestId) return;
+          results.replaceChildren();
+          results.hidden = false;
+          status.textContent = rows.length
+            ? "Последние 7 дней · до 20 сессий · выбор переключает анализ во всех вкладках"
+            : "Сессии не найдены";
+          for (const row of rows) {
+            const button = el("button", undefined, "session-result");
+            button.type = "button";
+            button.append(
+              el(
+                "strong",
+                row.title.length > 120
+                  ? row.title.slice(0, 120) + "…"
+                  : row.title,
+              ),
+              el("small", `${row.workspace} · ${time(row.started_at)}`),
+              el("small", "ID: " + row.session_id),
+            );
+            button.addEventListener("click", async () => {
+              if (switching) return;
+              switching = true;
+              button.disabled = true;
+              ++requestId;
+              clearTimeout(timer);
+              status.textContent = "Переключение сессии…";
+              try {
+                const response = await fetch("/session", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ key: row.key }),
+                });
+                if (!response.ok) throw new Error();
+                render(await response.json());
+                results.hidden = true;
+                input.value = "";
+                status.textContent = "Сессия выбрана · анализ через Codex CLI";
+              } catch {
+                status.textContent =
+                  "Не удалось открыть сессию. Предыдущий отчёт сохранён; повторите поиск.";
+              } finally {
+                switching = false;
+                button.disabled = false;
+              }
+            });
+            results.append(button);
+          }
+        } catch {
+          if (id === requestId)
+            status.textContent = "Поиск недоступен. Повторите попытку.";
+        }
+      }
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        clearTimeout(timer);
+        search();
+      });
+      input.addEventListener("input", () => {
+        clearTimeout(timer);
+        timer = setTimeout(search, 250);
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          ++requestId;
+          clearTimeout(timer);
+          results.hidden = true;
+        }
+      });
     }
   </script>
 </html>

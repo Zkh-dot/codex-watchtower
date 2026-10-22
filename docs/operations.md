@@ -144,6 +144,15 @@ file directory. Reconnecting SSE clients receive the current full snapshot.
 `report.html` is atomically replaced with mode 0600. Open it as a file for an offline
 snapshot; it performs no network requests under `file://`.
 
+The live header searches `/sessions?q=...` by folder, ID and title, with a 15-second
+catalog cache and at most 20 results. Only sessions started within the last seven
+days appear; modifying an old journal does not make it recent. Codex's local thread
+index supplies renamed titles, with the first user message as fallback. The picker
+is hidden in offline files. `POST /session` accepts only an opaque catalog key;
+arbitrary paths and foreign origins are rejected. Selection cancels the previous
+analysis before starting the next and restores each source's saved state. Selection
+is shared by all tabs. Aging out of search does not close the current report.
+
 Ingestion reads at most 200 records per tick so initial history does not block the
 HTTP server. Initial catch-up coverage is explicitly marked until the startup file
 boundary has been read and analyzed.

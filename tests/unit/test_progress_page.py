@@ -58,10 +58,11 @@ def test_page_charts_updates_and_preserves_details_and_scroll():
     harness = r"""
 const assert=require('node:assert/strict');
 class Element {
- constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.open=false;
+ constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.open=false;this.handlers={};
    this.className='';this.classList={add:(v)=>this.className+=' '+v};}
  append(...nodes){this.children.push(...nodes);}
  setAttribute(k,v){this[k]=v;}
+ addEventListener(name,callback){this.handlers[name]=callback;}
  replaceChildren(...nodes){this.children=nodes;}
  querySelectorAll(selector){let result=[];for(const c of this.children){
    if(selector==='details'&&c.tag==='details'||selector==='details[open]'&&c.tag==='details'&&c.open
@@ -71,9 +72,13 @@ class Element {
 const elements={app:new Element('main'),connection:new Element('span'),
  freshness:new Element('span'),'initial-data':new Element('script')};
 elements['initial-data'].textContent=JSON.stringify(SNAPSHOT);
+for(const id of ['session-picker','session-form','session-search',
+                 'session-results','session-search-status'])
+  elements[id]=new Element('div');
 global.document={getElementById:k=>elements[k],createElement:t=>new Element(t),
  createElementNS:(_,t)=>new Element(t)};
-global.window={scrollY:140,scrollTo:(x,y)=>assert.equal(y,140)};
+const scrolls=[];
+global.window={scrollY:140,scrollTo:(x,y)=>{assert([0,140].includes(y));scrolls.push(y);}};
 global.location={protocol:'file:'};global.setInterval=()=>{};
 """.replace("SNAPSHOT", json.dumps(snapshot, ensure_ascii=False))
     assertions = r"""
@@ -88,6 +93,7 @@ update.report.current_action=null;update.report.tasks[0].status='done';update.er
 update.history.push({version:2,at:'2026-10-22T08:05:00Z',progress:null,scope_changed:true});
 render(update);assert.equal(app.querySelectorAll('svg').length,2);
 assert.equal(app.querySelectorAll('details[open]').length,1);
+assert.equal(scrolls.at(-1),140);
 assert(app.querySelectorAll('svg')[0].children.some(c=>c.tag==='line'));
 let saved=app.children[0];render(update);assert.equal(app.children[0],saved);
 render(initial);assert.equal(app.children[0],saved); // stale versions cannot replace a newer report
@@ -113,6 +119,32 @@ assert(!visibleText(app).includes('▶ В работе'));
 assert(!allText(app).includes('60–74%')); // applies even after analysis catches up
 completed.version=5;completed.reported_goal.status='active';render(completed);
 assert(visibleText(app).includes('60–74%')); // resumed goals regain their current estimate
+(async()=>{
+ const selected=JSON.parse(JSON.stringify(initial));selected.session_id='another-session';
+ selected.selection_revision=1;selected.version=0;selected.report=null;
+ const calls=[];
+ global.fetch=async(url,options)=>{
+   calls.push([url,options]);
+   return {ok:true,json:async()=>options ? selected : [{key:'a'.repeat(24),
+     title:'<script>untrusted</script>',workspace:'/home/user/mtg',session_id:'another-session',
+     started_at:'2026-10-22T08:00:00Z'}]};
+ };
+ setupSessionPicker();assert.equal(elements['session-picker'].hidden,false);
+ elements['session-search'].value='mtg заголовок';
+ elements['session-form'].handlers.submit({preventDefault(){}});
+ await new Promise(setImmediate);
+ assert.equal(calls[0][0],'/sessions?q='+encodeURIComponent('mtg заголовок'));
+ const button=elements['session-results'].children[0];
+ assert.equal(button.children[0].textContent,'<script>untrusted</script>');
+ await button.handlers.click();
+ assert.equal(JSON.parse(calls[1][1].body).key,'a'.repeat(24));
+ assert.equal(state.session_id,'another-session');assert.equal(lastVersion,0);
+ assert.equal(elements['session-results'].hidden,true);assert.equal(scrolls.at(-1),0);
+ const currentRoot=app.children[0];
+ const late=JSON.parse(JSON.stringify(initial));late.version=999;late.selection_revision=0;
+ render(late);assert.equal(app.children[0],currentRoot); // old SSE cannot undo selection
+ assert.equal(state.session_id,'another-session');
+})().catch(error=>{console.error(error);process.exitCode=1;});
 """
     subprocess.run(
         ["node", "-"],
