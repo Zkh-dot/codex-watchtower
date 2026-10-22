@@ -693,3 +693,133 @@ async def test_correction_shares_the_original_deadline(engine, monkeypatch):
     assert calls == 2
     assert time.monotonic() - start < 0.15
     assert "время" in engine.snapshot()["error"]
+
+
+def test_recent_scope_uses_real_requests_not_partial_archive_or_internal_context(engine):
+    engine.ingest()
+    rows = engine.repo.progress_events(engine.session_id, -1)
+    engine.repo.save_progress(
+        engine.session_id,
+        rows[0]["event_sequence"],
+        "2026-10-22T08:00:00Z",
+        report_for(rows[0]["logical_event_id"]).model_dump_json(),
+    )
+    for ts, text in [
+        ("2026-10-22T08:01:03Z", "Больше не используй GitHub Actions"),
+        (
+            "2026-10-22T08:01:04Z",
+            '<codex_internal_context source="goal">Старая цель</codex_internal_context>',
+        ),
+    ]:
+        with engine.source.open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "timestamp": ts,
+                        "type": "response_item",
+                        "payload": {"type": "message", "role": "user", "content": [{"text": text}]},
+                    }
+                )
+                + "\n"
+            )
+    engine.ingest()
+    packet, _, previous = engine.packet(live=True)
+    data = json.loads(packet)
+    assert previous is None
+    assert data["previous_report"] is None  # archival guesses must not become the live task
+    assert (
+        data["request_context"]["latest_request"]["summary"] == "Больше не используй GitHub Actions"
+    )
+    assert all(
+        "codex_internal_context" not in r["summary"]
+        for r in data["request_context"]["user_messages"]
+    )
+    assert data["coverage"]["scope_request_id"]
+
+
+def test_recent_packet_keeps_messages_and_completion_before_verbose_tool_outputs(engine):
+    engine.ingest()
+    for kind, payload in [
+        (
+            "response_item",
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "text": (
+                            "Исправлено и отправлено; 602 теста прошли. "
+                            "Python повторно не запускал."
+                        )
+                    }
+                ],
+            },
+        ),
+        (
+            "event_msg",
+            {
+                "type": "task_complete",
+                "last_agent_message": (
+                    "Исправлено и отправлено; 602 теста прошли. Python повторно не запускал."
+                ),
+            },
+        ),
+    ]:
+        with engine.source.open("a") as stream:
+            stream.write(
+                json.dumps({"timestamp": "2026-10-22T09:00:00Z", "type": kind, "payload": payload})
+                + "\n"
+            )
+    for i in range(100):
+        with engine.source.open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "timestamp": "2026-10-22T09:01:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "call_id": str(i),
+                            "output": "verbose " + "x" * 7000,
+                        },
+                    }
+                )
+                + "\n"
+            )
+    engine.ingest()
+    packet, _, _ = engine.packet(live=True)
+    data = json.loads(packet)
+    assert any(
+        e["source_type"] == "turn_complete" and "602 теста" in e["summary"] for e in data["events"]
+    )
+    assert len(packet) <= PACKET_BUDGET
+    assert all(e["kind"] != "reasoning" for e in data["events"])
+
+
+@pytest.mark.asyncio
+async def test_new_request_after_completed_turn_starts_fresh_task_list(engine):
+    engine.ingest()
+    ref = engine.repo.progress_events(engine.session_id, -1)[-1]["logical_event_id"]
+    engine.assessor = AsyncMock(return_value=report_for(ref))
+    await engine.assess(live=True)
+    with engine.source.open("a") as stream:
+        for typ, payload in [
+            ("event_msg", {"type": "task_complete", "last_agent_message": "Готово"}),
+            ("event_msg", {"type": "task_started"}),
+            (
+                "response_item",
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"text": "Исправь новые замечания"}],
+                },
+            ),
+        ]:
+            stream.write(
+                json.dumps({"timestamp": "2026-10-22T09:00:00Z", "type": typ, "payload": payload})
+                + "\n"
+            )
+    engine.ingest()
+    packet, _, previous = engine.packet(live=True)
+    assert previous is None
+    assert json.loads(packet)["previous_report"] is None

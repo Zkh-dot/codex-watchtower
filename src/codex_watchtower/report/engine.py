@@ -135,10 +135,73 @@ class ReportEngine:
         self.bootstrap_target = state["bootstrap_target"]
         return result.cursor.byte_offset > cursor.byte_offset
 
+    def request_context(self) -> dict[str, Any]:
+        users = [
+            r
+            for r in self.repo.connection.execute(
+                "SELECT * FROM normalized_events WHERE session_id=? AND kind='message' "
+                "AND source_type='user' ORDER BY event_sequence DESC",
+                (self.session_id,),
+            )
+            if not r["summary"]
+            .lstrip()
+            .startswith(
+                (
+                    "<codex_internal_context",
+                    "# AGENTS.md instructions",
+                    "<environment_context>",
+                    "<permissions instructions>",
+                    "<collaboration_mode>",
+                    "<turn_aborted>",
+                )
+            )
+        ]
+        latest = users[0] if users else None
+        boundary = self.repo.connection.execute(
+            "SELECT MAX(event_sequence) FROM normalized_events WHERE session_id=? "
+            "AND source_type='turn_complete' AND event_sequence<?",
+            (self.session_id, latest["event_sequence"] if latest else -1),
+        ).fetchone()[0]
+        scope = next(
+            (
+                r
+                for r in reversed(users)
+                if r["event_sequence"] > (boundary if boundary is not None else -1)
+            ),
+            latest,
+        )
+
+        def context_event(row: Any, limit: int) -> dict[str, Any]:
+            return {
+                "id": row["logical_event_id"],
+                "timestamp": row["timestamp"],
+                "source_type": row["source_type"],
+                "summary": row["summary"][:limit],
+            }
+
+        outcomes = self.repo.connection.execute(
+            "SELECT * FROM normalized_events WHERE session_id=? AND source_type='turn_complete' "
+            "AND event_sequence<? ORDER BY event_sequence DESC LIMIT 2",
+            (self.session_id, scope["event_sequence"] if scope else -1),
+        )
+        return {
+            "scope_request_id": scope["logical_event_id"] if scope else None,
+            "latest_request": context_event(latest, 4000) if latest else None,
+            "user_messages": [context_event(r, 1000) for r in reversed(users[1:8])],
+            "previous_outcomes": [context_event(r, 2000) for r in outcomes],
+        }
+
     def packet(self, *, live: bool = False) -> tuple[str, int, ProgressReport | None]:
         latest = self.repo.latest_progress(self.session_id, live=live)
-        if live and latest is None:
-            latest = self.repo.latest_progress(self.session_id)
+        context = self.request_context() if live else None
+        if live and latest:
+            assert context is not None
+            saved = json.loads(latest["coverage"])
+            if (
+                saved.get("context_version") != 3
+                or saved.get("scope_request_id") != context["scope_request_id"]
+            ):
+                latest = None
         previous = ProgressReport.model_validate_json(latest["body"]) if latest else None
         after = latest["event_cursor"] if latest else -1
         rows = self.repo.progress_events(self.session_id, after)
@@ -165,29 +228,47 @@ class ReportEngine:
         evidence = self.repo.progress_evidence(
             self.session_id, previous.references() if previous else set()
         )
-        if live:
-            # Keep the current request available even if it predates the five-minute window.
-            anchor = self.repo.connection.execute(
-                "SELECT * FROM normalized_events WHERE session_id=? AND kind='message' "
-                "AND source_type='user' ORDER BY event_sequence DESC LIMIT 1",
-                (self.session_id,),
-            ).fetchone()
-            if anchor and anchor["logical_event_id"] not in {
-                r["logical_event_id"] for r in evidence
-            }:
-                evidence.append(anchor)
+        context_refs = set()
+        if context:
+            context_refs = {
+                r["id"]
+                for r in [
+                    context["latest_request"],
+                    *context["user_messages"],
+                    *context["previous_outcomes"],
+                ]
+                if r
+            }
+        previous_data = previous.model_dump() if previous else None
+        if live and previous:
+            previous_data = {
+                "goal": previous.goal,
+                "summary": previous.summary.model_dump(),
+                "tasks": [
+                    {
+                        "id": t.id,
+                        "title": t.title[:120],
+                        "status": t.status,
+                        "active": t.active,
+                        "refs": t.refs[:1],
+                    }
+                    for t in previous.tasks
+                ],
+            }
         source_state = self.repo.get_progress_source(self.session_id)
         assert source_state is not None
         packet: dict[str, Any] = {
             "session_id": self.session_id,
             "validation_feedback": None,
-            "previous_report": previous.model_dump() if previous else None,
+            "request_context": context,
+            "previous_report": previous_data,
             "previous_evidence": [
-                {"id": row["logical_event_id"], "summary": row["summary"][: 1200 if live else 160]}
-                for row in evidence
+                {"id": row["logical_event_id"], "summary": row["summary"][:160]} for row in evidence
             ],
             "events": [],
             "coverage": {
+                "context_version": 3 if live else None,
+                "scope_request_id": context["scope_request_id"] if context else None,
                 "mode": "recent" if live else "history",
                 "window_minutes": WINDOW_MINUTES if live else None,
                 "window_start": window_start,
@@ -203,29 +284,35 @@ class ReportEngine:
             },
         }
 
+        packet["previous_evidence"].extend(
+            {"id": ref} for ref in sorted(context_refs - {r["logical_event_id"] for r in evidence})
+        )
+        if live:
+            priorities = {"message": 0, "turn_lifecycle": 0, "command_result": 1, "command": 2}
+            rows = sorted(
+                (r for r in rows if r["kind"] in priorities),
+                key=lambda r: (priorities[r["kind"]], -r["event_sequence"]),
+            )
+
         def encode() -> str:
             return json.dumps(packet, ensure_ascii=False, separators=(",", ":"))
 
         if len(encode()) > PACKET_BUDGET - 5000:
-            packet["previous_evidence"] = [
-                {
-                    "id": r["logical_event_id"],
-                    **(
-                        {"summary": r["summary"][:1200]}
-                        if live and r["source_type"] == "user"
-                        else {}
-                    ),
-                }
-                for r in evidence
-            ]
+            packet["previous_evidence"] = [{"id": r["id"]} for r in packet["previous_evidence"]]
         for row in rows:
+            summary = row["summary"]
+            if live:
+                if row["kind"] in ("message", "turn_lifecycle"):
+                    summary = summary[:4000]
+                elif len(summary) > 1200:
+                    summary = summary[:300] + "\n[excerpt]\n" + summary[-800:]
             event = {
                 "id": row["logical_event_id"],
                 "sequence": row["event_sequence"],
                 "timestamp": row["timestamp"],
                 "kind": row["kind"],
                 "source_type": row["source_type"],
-                "summary": row["summary"][:1200] if live else row["summary"],
+                "summary": summary,
                 "exit_code": row["exit_code"],
             }
             packet["events"].append(event)
@@ -238,8 +325,8 @@ class ReportEngine:
         if not packet["events"]:
             raise ValueError("no new event fits the context budget")
         if live:
-            packet["events"].reverse()
-        cursor = packet["events"][-1]["sequence"]
+            packet["events"].sort(key=lambda e: e["sequence"])
+        cursor = packet["coverage"]["latest_sequence"] if live else packet["events"][-1]["sequence"]
         packet["coverage"]["included_events"] = len(packet["events"])
         packet["coverage"]["omitted_events"] = available - len(packet["events"])
         packet["coverage"]["through_sequence"] = cursor
@@ -252,11 +339,12 @@ class ReportEngine:
         maximum = self.repo.max_event_sequence(self.session_id)
         state = self.repo.get_progress_source(self.session_id)
         assert state is not None
+        rebuild = bool(latest and json.loads(latest["coverage"]).get("context_version") != 3)
         return bool(
             maximum is not None
-            and (latest is None or latest["event_cursor"] < maximum)
+            and (latest is None or latest["event_cursor"] < maximum or rebuild)
             and (
-                (latest is None and not state["live_error"])
+                ((latest is None or rebuild) and not state["live_error"])
                 or now >= state["live_attempt_at"] + self.interval
             )
         )
