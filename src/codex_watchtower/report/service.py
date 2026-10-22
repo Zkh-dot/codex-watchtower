@@ -73,7 +73,12 @@ async def serve_report(engine: ReportEngine) -> None:
         sock.bind(("127.0.0.1", 0))
         sock.listen(128)
         server = uvicorn.Server(
-            uvicorn.Config(create_report_app(engine), log_level="warning", access_log=False)
+            uvicorn.Config(
+                create_report_app(engine),
+                log_level="warning",
+                access_log=False,
+                timeout_graceful_shutdown=3,
+            )
         )
         serving = asyncio.create_task(server.serve(sockets=[sock]))
         while not server.started and not serving.done():

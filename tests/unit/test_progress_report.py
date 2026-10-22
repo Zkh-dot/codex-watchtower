@@ -78,6 +78,81 @@ def append(engine, text="Работа продолжается", terminated=True
         stream.write(json.dumps(record) + ("\n" if terminated else ""))
 
 
+@pytest.mark.asyncio
+async def test_goal_completion_is_visible_ahead_of_historical_assessment(engine):
+    engine.ingest()
+    _, _, previous = engine.packet()
+    assert previous is None
+    ref = engine.repo.get_events_since(engine.session_id, None)[0]["logical_event_id"]
+    engine.assessor = AsyncMock(return_value=report_for(ref))
+    await engine.assess()
+    assert engine.snapshot()["report_is_current"]
+
+    def goal_output(status, thread_id):
+        return {
+            "type": "response_item",
+            "timestamp": "2026-10-22T09:05:00Z",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "goal-call",
+                "output": json.dumps(
+                    [
+                        {"text": "x" * 8000},
+                        {"text": json.dumps({"goal": {"threadId": thread_id, "status": status}})},
+                    ]
+                ),
+            },
+        }
+
+    with engine.source.open("a") as stream:
+        stream.write(json.dumps(goal_output("complete", engine.session_id)) + "\n")
+    engine.ingest()
+    assert engine.snapshot()["reported_goal"] is None  # arbitrary tool text is not a goal result
+    with engine.source.open("a") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call",
+                        "name": "exec",
+                        "call_id": "goal-call",
+                        "input": "text(await tools.update_goal({status: 'complete'}));",
+                    },
+                }
+            )
+            + "\n"
+        )
+        stream.write(json.dumps(goal_output("complete", "other-session")) + "\n")
+        stream.write(json.dumps(goal_output("complete", engine.session_id)) + "\n")
+    engine.ingest()
+    snapshot = engine.snapshot()
+    assert snapshot["reported_goal"]["status"] == "complete"
+    assert snapshot["reported_goal"]["at"] == "2026-10-22T09:05:00Z"
+    assert not snapshot["report_is_current"]
+    assert snapshot["report"]["tasks"][0]["status"] == "in_progress"
+    assert engine.assessor.await_count == 1  # current goal status needs no model call
+    restored = ReportEngine(engine.repo, engine.source, engine.output)
+    assert restored.snapshot()["reported_goal"] == snapshot["reported_goal"]
+    with engine.source.open("a") as stream:
+        stream.write(json.dumps(goal_output("active", engine.session_id)) + "\n")
+    engine.ingest()
+    assert engine.snapshot()["reported_goal"]["status"] == "active"
+
+
+def test_goal_status_does_not_come_from_prose_or_another_thread():
+    from codex_watchtower.codex.goal import reported_goal
+
+    assert reported_goal("Goal achieved", "session") is None
+    assert reported_goal({"goal": {"threadId": "other", "status": "complete"}}, "session") is None
+    assert reported_goal({"goal": {"threadId": "session", "status": []}}, "session") is None
+    assert reported_goal({"goal": {"threadId": "session", "status": "invalid"}}, "session") is None
+    assert reported_goal('{"goal":', "session") is None
+    assert reported_goal(
+        {"output": {"goal": {"threadId": "session", "status": "blocked"}}}, "session"
+    ) == {"status": "blocked"}
+
+
 def test_real_envelopes_partial_restart_and_replacement(engine):
     engine.ingest()
     rows = engine.repo.get_events_since(engine.session_id, None)

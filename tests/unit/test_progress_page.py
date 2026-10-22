@@ -25,6 +25,9 @@ def test_page_charts_updates_and_preserves_details_and_scroll():
         "next_check_at": None,
         "last_turn_state": "between_turns",
         "process_state": "unverified",
+        "report_is_current": True,
+        "reported_goal": None,
+        "report_through_at": "2026-10-22T08:00:00Z",
         "coverage": {
             "analyzed_sequence": 0,
             "latest_sequence": 0,
@@ -75,6 +78,10 @@ global.location={protocol:'file:'};global.setInterval=()=>{};
 """.replace("SNAPSHOT", json.dumps(snapshot, ensure_ascii=False))
     assertions = r"""
 assert.equal(app.querySelectorAll('svg').length,3);
+function visibleText(n){return (n.textContent||'')+(n.tag==='details'&&!n.open
+  ? n.children.filter(c=>c.tag==='summary'):n.children).map(visibleText).join(' ');}
+assert(!visibleText(app).includes(initial.report.tasks[0].comment));
+assert(!visibleText(app).includes(initial.report.progress_reason));
 let detail=app.querySelectorAll('details')[0];detail.open=true;
 const update=JSON.parse(JSON.stringify(initial));update.version=2;update.report.progress=null;
 update.report.current_action=null;update.report.tasks[0].status='done';update.error='model timeout';
@@ -85,6 +92,18 @@ assert(app.querySelectorAll('svg')[0].children.some(c=>c.tag==='line'));
 let saved=app.children[0];render(update);assert.equal(app.children[0],saved);
 render(initial);assert.equal(app.children[0],saved); // stale versions cannot replace a newer report
 assert.equal(connection.textContent,undefined); // offline snapshots do not initiate SSE
+const completed=JSON.parse(JSON.stringify(update));completed.version=3;
+completed.reported_goal={status:'complete',at:'2026-10-22T08:05:00Z'};
+completed.report_is_current=false;completed.coverage.latest_sequence=50000;
+completed.report.tasks[0].status='in_progress';render(completed);
+assert(visibleText(app).includes('✓ Цель завершена'));
+assert(visibleText(app).includes('Архивный срез'));
+assert(visibleText(app).includes('Задачи архивного среза'));
+assert(!visibleText(app).includes('▶ В работе')); // old tasks cannot masquerade as live work
+assert(!visibleText(app).includes(initial.report.current_action.text));
+completed.version=4;completed.report_is_current=true;render(completed);
+assert(visibleText(app).includes('Последняя оценка задач'));
+assert(!visibleText(app).includes('▶ В работе'));
 """
     subprocess.run(
         ["node", "-"],

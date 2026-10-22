@@ -142,6 +142,10 @@ The Russian report includes evidence-linked results, remaining work, current wor
 as last observed, blockers, task statuses, estimated progress and ETA when justified.
 Charts show the estimated range, its history and task counts by status. Task counts
 are not treated as a completion percentage. Missing estimates remain missing.
+The compact view uses expandable task rows, summaries and evidence. A structured
+Codex goal status is shown separately from the model assessment. While analysis
+lags behind the ingested journal, old estimates and tasks are collapsed and marked
+as historical; they are not presented as current work or changed to 100% completion.
 
 The first analysis starts immediately. Initial history is folded in bounded batches;
 a partial report shows its coverage. After initial catch-up, analysis runs every

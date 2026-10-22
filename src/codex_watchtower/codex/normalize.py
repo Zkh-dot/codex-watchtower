@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import Any
 
 from codex_watchtower import domain
+from codex_watchtower.codex.goal import reported_goal
 from codex_watchtower.codex.tailer import RawRecord
 from codex_watchtower.privacy.redact import bound_text, redact_text
 
@@ -252,6 +253,16 @@ def _normalize_envelope(
             text = f"Result [{payload.get('call_id')}]: " + json.dumps(
                 payload.get("output"), ensure_ascii=False
             )
+            if goal := reported_goal(payload.get("output"), session_id):
+                source = "goal_status"
+                # Preserve status even when the surrounding tool result exceeds the excerpt budget.
+                text = json.dumps(
+                    {
+                        "goal": {"threadId": session_id, **goal},
+                        "call_id": payload.get("call_id"),
+                        "note": "Surrounding tool output omitted. [TRUNCATED event excerpt]",
+                    }
+                )
         elif subtype == "reasoning":
             kind = domain.EventKind.reasoning
             text = json.dumps(payload.get("summary", []), ensure_ascii=False)

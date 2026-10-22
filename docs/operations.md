@@ -147,6 +147,13 @@ snapshot; it performs no network requests under `file://`.
 Ingestion reads at most 200 records per tick so initial history does not block the
 HTTP server. Initial catch-up coverage is explicitly marked until the startup file
 boundary has been read and analyzed.
+The header reads structured, session-matching Codex goal results from ingested
+events independently of the model cursor. A reported completed goal can therefore
+appear while historical analysis continues. Goal completion is Codex-reported,
+not an independent acceptance check or process-exit signal. Prose and statuses for
+other sessions do not set this indicator. If no structured status is available,
+the header says unknown. Stale task lists and estimates stay under historical
+disclosures; only a fully caught-up assessment is presented as current work.
 
 The state directory is `state_dir/progress/`. Each absolute source path has a hashed
 database name and an advisory lock preventing two report processes from observing

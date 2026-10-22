@@ -23,7 +23,7 @@ Implementation date: 2026-10-22. Product specification:
 | Frontend rendering and updates | Node self-check exercises all three SVG charts, missing estimates, scope markers, task transition, duplicate/old updates, retained details and scroll; it is a DOM stub, not a visual browser test |
 | Packaging | Built sdist/wheel; unpacked-wheel smoke verifies ingestion/export without source resources; HTML, prompt and SQL migration included |
 
-The full test suite passed with 573 tests and one opt-in probe skipped. The probe
+The full test suite passed with 575 tests and one opt-in probe skipped. The probe
 was also run explicitly and passed. Ruff lint, Ruff format and mypy passed. Tests
 requiring local sockets ran outside the restrictive network sandbox, with a finite
 outer timeout. One pre-existing Starlette TestClient deprecation warning remains.
@@ -74,6 +74,26 @@ Visual acceptance therefore remains pending, despite browser authorization.
 
 The upstream merge attempt returned a GitHub permissions error for the current
 account. The user will complete merge in the UI if that access remains unavailable.
+
+## Compact UI and completion-status correction
+
+The UI revision collapses summaries, evidence, estimate explanations and task
+comments into native disclosures, with compact task rows and nonempty status
+counts. Disclosure state and scroll position remain stable across updates.
+
+A structured Codex goal result is read independently of the historical model
+cursor. A completed goal therefore appears as completed even during initial
+catch-up; old task statuses and estimates stay under explicitly historical
+disclosures. Completion prose, another thread's goal and a finished turn do not
+set this status. A later structured active status replaces completion.
+Regression tests cover these boundaries, oversized tool results, restart and the
+absence of old in-progress tasks in the visible completed-goal view. The real
+journal snapshot returned a completed goal while its model report still covered
+older events. Browser tools remain unattached, so visual acceptance is pending.
+
+An additional HTTP lifecycle regression holds SSE open during SIGINT. The server
+now bounds graceful shutdown so an attached browser cannot delay restart forever.
+All 22 focused report/page/HTTP tests passed after that change.
 
 ## Pending acceptance
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from codex_watchtower.codex.discovery import read_session_meta
+from codex_watchtower.codex.goal import reported_goal
 from codex_watchtower.codex.normalize import normalize_record
 from codex_watchtower.codex.tailer import IdentityBroken, read_new_records, resolve_start
 from codex_watchtower.models.codex_cli import run_codex
@@ -258,10 +259,65 @@ class ReportEngine:
             "AND kind='turn_lifecycle' ORDER BY event_sequence DESC LIMIT 1",
             (self.session_id,),
         ).fetchone()
+        goal = None
+        candidates = self.repo.connection.execute(
+            "SELECT logical_event_id, event_sequence, timestamp, summary FROM normalized_events "
+            "WHERE session_id=? AND kind='command_result' "
+            "AND source_type IN ('response_item:function_call_output', "
+            "'response_item:custom_tool_call_output', 'goal_status') "
+            "AND (source_type='goal_status' OR summary LIKE '%goal%') "
+            "ORDER BY event_sequence DESC",
+            (self.session_id,),
+        )
+        for row in candidates:
+            canonical = row["summary"].startswith("{")
+            if canonical:
+                try:
+                    data = json.loads(row["summary"])
+                except ValueError:
+                    continue
+                call_id = data.get("call_id") if isinstance(data, dict) else None
+            else:
+                call_id = row["summary"].partition("[")[2].partition("]: ")[0]
+            if not isinstance(call_id, str) or not 1 <= len(call_id) <= 128:
+                continue
+            call = self.repo.connection.execute(
+                "SELECT summary FROM normalized_events WHERE session_id=? AND kind='command' "
+                "AND event_sequence<? AND instr(summary, ?)>0 ORDER BY event_sequence DESC LIMIT 1",
+                (self.session_id, row["event_sequence"], f"[{call_id}]:"),
+            ).fetchone()
+            if not call or not any(
+                marker in call["summary"]
+                for marker in (
+                    "tools.update_goal(",
+                    "tools.get_goal(",
+                    "update_goal [",
+                    "get_goal [",
+                )
+            ):
+                continue
+            if goal := reported_goal(
+                row["summary"] if canonical else row["summary"].partition("]: ")[2],
+                self.session_id,
+            ):
+                goal.update({"at": row["timestamp"], "ref": row["logical_event_id"]})
+                break
+        analyzed = self.repo.connection.execute(
+            "SELECT timestamp FROM normalized_events WHERE session_id=? AND event_sequence=?",
+            (self.session_id, latest["event_cursor"] if latest else -1),
+        ).fetchone()
         return {
             "version": latest["version"] if latest else 0,
             "session_id": self.session_id,
             "report": report,
+            "reported_goal": goal,
+            "report_through_at": analyzed["timestamp"] if analyzed else None,
+            "report_is_current": bool(
+                latest
+                and latest["event_cursor"] == maximum
+                and state["bootstrap_target"] is not None
+                and not self.source_error
+            ),
             "assessed_at": latest["assessed_at"] if latest else None,
             "last_event_at": recent["timestamp"] if recent else None,
             "last_turn_state": (

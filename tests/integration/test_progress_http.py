@@ -95,8 +95,14 @@ def test_report_command_http_sse_export_and_shutdown(tmp_path):
                                 assert json.loads(line[6:])["version"] == 1
                                 break
                 assert client.get("/rollout.jsonl").status_code == 404
+                # A browser keeps SSE open; it must not prevent Ctrl+C shutdown.
+                with client.stream("GET", "/events") as stream:
+                    assert stream.status_code == 200
+                    process.send_signal(signal.SIGINT)
+                    process.wait(timeout=10)
         finally:
-            process.send_signal(signal.SIGINT)
+            if process.poll() is None:
+                process.send_signal(signal.SIGINT)
             try:
                 process.wait(timeout=15)
             except subprocess.TimeoutExpired:

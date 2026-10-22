@@ -3,6 +3,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Codex · Прогресс сессии</title>
+  <!-- Existing palette; 14/16/20px type, 8px rhythm, compact rows and native disclosures. -->
   <style>
     :root {
       color-scheme: dark;
@@ -24,7 +25,7 @@
       background: var(--bg);
       color: var(--text);
       font:
-        16px/1.55 system-ui,
+        14px/1.4 system-ui,
         sans-serif;
     }
     main,
@@ -32,25 +33,25 @@
     footer {
       max-width: 1150px;
       margin: auto;
-      padding: 24px;
+      padding: 16px;
     }
     header {
       padding-bottom: 0;
     }
     h1 {
-      font-size: 28px;
-      margin: 8px 0;
+      font-size: 20px;
+      margin: 4px 0 8px;
     }
     h2 {
-      font-size: 19px;
-      margin: 0 0 16px;
+      font-size: 16px;
+      margin: 0 0 8px;
     }
     h3 {
       font-size: 15px;
-      margin: 16px 0 8px;
+      margin: 8px 0 4px;
     }
     p {
-      margin: 8px 0;
+      margin: 4px 0;
     }
     .muted,
     small {
@@ -65,14 +66,14 @@
     .grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 20px;
+      gap: 10px;
     }
     .card {
       background: var(--card);
       border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 24px;
-      margin-bottom: 20px;
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
     }
     .grid .card {
       margin: 0;
@@ -81,17 +82,17 @@
       grid-column: 1/-1;
     }
     .number {
-      font-size: 38px;
+      font-size: 30px;
       font-weight: 650;
       color: var(--accent);
     }
     .badge {
       display: inline-block;
-      font-size: 13px;
+      font-size: 12px;
       border: 1px solid var(--line);
       border-radius: 20px;
-      padding: 3px 10px;
-      margin: 3px 6px 3px 0;
+      padding: 2px 7px;
+      margin: 2px 4px 2px 0;
     }
     .good {
       color: var(--good);
@@ -104,24 +105,55 @@
     }
     .task {
       border-top: 1px solid var(--line);
-      padding: 16px 0;
+      padding: 0;
     }
     .task:first-of-type {
       border-top: 0;
-    }
-    .task.in_progress {
-      border-left: 3px solid var(--accent);
-      padding-left: 16px;
     }
     .task.inactive {
       opacity: 0.65;
     }
     details {
-      margin: 10px 0;
+      margin: 4px 0;
     }
     summary {
       cursor: pointer;
       color: var(--accent);
+    }
+    summary:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+    .task > summary {
+      min-height: 44px;
+      padding: 8px 0;
+      color: var(--text);
+    }
+    .task > p,
+    .task > small,
+    .task > details {
+      margin-left: 20px;
+    }
+    .task .badge {
+      color: var(--status-color);
+    }
+    .meta-line {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px 10px;
+    }
+    .meta-line .session {
+      margin-left: auto;
+    }
+    .compact-note {
+      font-size: 12px;
+    }
+    .current {
+      color: var(--accent);
+    }
+    .history svg {
+      max-height: 125px;
     }
     pre {
       white-space: pre-wrap;
@@ -137,13 +169,13 @@
       width: 100%;
       height: auto;
       display: block;
-      margin: 14px 0;
+      margin: 8px 0;
     }
     ul {
       padding-left: 22px;
     }
     li {
-      margin: 8px 0;
+      margin: 4px 0;
     }
     .statusline {
       display: flex;
@@ -180,7 +212,7 @@
         padding: 16px;
       }
       .card {
-        padding: 18px;
+        padding: 10px 12px;
       }
       .number {
         font-size: 30px;
@@ -188,8 +220,8 @@
     }
   </style>
   <header>
-    <div class="eyebrow">Codex Watchtower / session report</div>
-    <h1>Как продвигается работа</h1>
+    <div class="eyebrow">Codex Watchtower</div>
+    <h1>Прогресс сессии</h1>
     <div class="statusline">
       <span id="connection" class="badge">Сохранённый снимок</span
       ><span id="freshness" class="badge"></span>
@@ -201,9 +233,12 @@
     внешние ресурсы не требуются.</noscript
   >
   <footer>
-    Процент и ETA — оценки по журналу. Выполнение цели, завершение хода и
-    завершение процесса различаются. Сервис не проверяет результат независимо от
-    наблюдаемой сессии.
+    <details>
+      <summary>Об оценках</summary>
+      Процент и ETA — оценки по журналу. Выполнение цели, завершение хода и
+      завершение процесса различаются. Сервис не проверяет результат независимо
+      от наблюдаемой сессии.
+    </details>
   </footer>
   <script id="initial-data" type="application/json">
     __INITIAL_SNAPSHOT__
@@ -246,6 +281,12 @@
       n.append(el("h2", title));
       return n;
     }
+    function cut(title, key) {
+      const n = el("details");
+      n.dataset.key = key;
+      n.append(el("summary", title));
+      return n;
+    }
     function svgNode(tag, attrs) {
       const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
       for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
@@ -286,9 +327,9 @@
       parent.append(ul);
     }
     function progressCard(r) {
-      const n = card("Оценка завершённости");
+      const n = card("Прогресс");
       if (!r.progress) {
-        n.append(el("p", "Оценка недоступна", "number"));
+        n.append(el("p", "—", "number"));
       } else {
         const p = r.progress;
         n.append(el("div", `${p.low}–${p.high}%`, "number"));
@@ -325,12 +366,14 @@
         );
         n.append(s);
       }
-      n.append(el("p", r.progress_reason, "muted"));
+      const explanation = cut("Об оценке", "progress-reason");
+      explanation.append(el("p", r.progress_reason, "muted"));
       if (r.eta) {
         n.append(
           el(
-            "h3",
-            `ETA · примерно ${r.eta.low_minutes}–${r.eta.high_minutes} мин`,
+            "span",
+            `ETA ≈ ${r.eta.low_minutes}–${r.eta.high_minutes} мин`,
+            "badge",
           ),
         );
         const confidence = {
@@ -338,7 +381,7 @@
           medium: "средняя",
           high: "высокая",
         };
-        n.append(
+        explanation.append(
           el(
             "p",
             "Уверенность: " +
@@ -347,11 +390,13 @@
               r.eta.assumption,
           ),
         );
-      } else n.append(el("p", "ETA: недостаточно оснований", "muted"));
+      } else n.append(el("span", "ETA —", "badge"));
+      n.append(explanation);
       return n;
     }
     function historyCard() {
-      const n = card("Как менялась оценка");
+      const n = card("История прогресса");
+      n.classList.add("history");
       const h = state.history,
         s = chart("История диапазона прогресса от 0 до 100 процентов", 200);
       s.append(
@@ -442,13 +487,11 @@
             : "Ожидается первый анализ",
         ),
       );
-      n.append(
-        el(
-          "p",
-          "Пропуски — оценка недоступна. Жёлтые отметки — изменение объёма задания.",
-          "muted",
-        ),
+      const legend = cut("Обозначения", "history-legend");
+      legend.append(
+        el("small", "Пропуск: нет оценки · жёлтая линия: изменился объём"),
       );
+      n.append(legend);
       return n;
     }
     function tasksCard(r) {
@@ -472,30 +515,31 @@
           );
           x += w;
         }
-        n.append(el("span", `${labels[status]} · ${count}`, "badge"));
+        if (count) {
+          const badge = el("span", `${labels[status]} ${count}`, "badge");
+          badge.setAttribute("style", `color:${colors[status]}`);
+          n.append(badge);
+        }
       }
       n.append(s);
-      n.append(
-        el(
-          "p",
-          "Распределение задач не является процентом выполнения. «В работе» — по последним наблюдениям.",
-          "muted",
-        ),
-      );
       for (const t of r.tasks) {
         const row = el(
-          "article",
+          "details",
           undefined,
           "task " + t.status + (t.active ? "" : " inactive"),
         );
-        row.append(
+        row.dataset.key = "task-" + t.id;
+        row.setAttribute("style", `--status-color:${colors[t.status]}`);
+        const heading = el("summary");
+        heading.append(
           el(
             "span",
             t.active ? labels[t.status] : "Исключено из объёма",
             "badge",
           ),
         );
-        row.append(el("strong", t.title));
+        heading.append(el("strong", t.title));
+        row.append(heading);
         row.append(el("p", t.comment));
         row.append(
           el(
@@ -507,7 +551,7 @@
                 : "Из требований пользователя",
           ),
         );
-        evidence(row, t.refs, "task-" + t.id);
+        evidence(row, t.refs, "task-evidence-" + t.id);
         n.append(row);
       }
       if (!r.tasks.length) n.append(el("p", "План пока не восстановлен."));
@@ -525,21 +569,60 @@
         ),
         scroll = window.scrollY;
       const root = el("div", undefined, "grid");
-      const meta = card("Сессия");
-      meta.classList.add("full");
-      meta.append(el("p", state.session_id, "session"));
-      meta.append(
-        el("p", "Последнее событие: " + time(state.last_event_at), "muted"),
+      const meta = el("section", undefined, "card full");
+      const line = el("div", undefined, "meta-line");
+      const goal = state.reported_goal;
+      const goalLabels = {
+        complete: "✓ Цель завершена",
+        active: "▶ Цель активна",
+        blocked: "! Цель заблокирована",
+        paused: "Ⅱ Цель приостановлена",
+      };
+      line.append(
+        el(
+          "strong",
+          goal ? goalLabels[goal.status] : "? Статус цели неизвестен",
+          goal?.status === "complete" ? "good" : "",
+        ),
       );
-      meta.append(
+      if (state.analyzing)
+        line.append(el("span", "◌ Анализ истории", "badge warning"));
+      line.append(el("span", state.session_id.slice(0, 8), "session"));
+      meta.append(line);
+      const c = state.coverage;
+      const current = state.report_is_current === true;
+      const closed = goal?.status === "complete";
+      const total = c.latest_sequence === null ? 0 : c.latest_sequence + 1;
+      const covered = Math.max(0, c.analyzed_sequence + 1);
+      if (!current) {
+        meta.append(
+          el(
+            "p",
+            `◷ Архивный срез · разобрано ${covered.toLocaleString("ru-RU")} / ${total.toLocaleString("ru-RU")} событий`,
+            "warning compact-note",
+          ),
+        );
+        if (state.report_through_at)
+          meta.append(
+            el(
+              "small",
+              "Отчёт по событиям до " + time(state.report_through_at),
+            ),
+          );
+      }
+      const info = cut("Сессия и покрытие", "session-info");
+      info.append(el("p", state.session_id, "session"));
+      info.append(
         el(
           "p",
-          "Успешный анализ: " +
-            time(state.assessed_at) +
-            " · следующая проверка: " +
-            (state.next_check_at
-              ? time(state.next_check_at)
-              : "при новых событиях"),
+          `Событие: ${time(state.last_event_at)} · анализ: ${time(state.assessed_at)}`,
+          "muted",
+        ),
+      );
+      info.append(
+        el(
+          "p",
+          `Повреждено ${c.malformed_count} · неизвестно ${c.unknown_count} · сокращено ${c.truncated_count}`,
           "muted",
         ),
       );
@@ -548,77 +631,97 @@
         between_turns: "завершён",
         unknown: "неизвестно",
       };
-      meta.append(
+      info.append(
         el(
           "p",
-          "Последний наблюдаемый ход: " +
-            turns[state.last_turn_state] +
-            ". Завершение процесса: не подтверждено. Выполнение цели оценивается ниже.",
+          `Ход: ${turns[state.last_turn_state]} · завершение процесса не подтверждено`,
           "muted",
         ),
       );
-      const c = state.coverage;
-      meta.append(
-        el(
-          "small",
-          `Покрытие: ${c.analyzed_sequence + 1} из ${c.latest_sequence === null ? 0 : c.latest_sequence + 1} событий. Повреждённых записей: ${c.malformed_count}; неизвестных событий: ${c.unknown_count}; усечённых выдержек: ${c.truncated_count}.`,
-        ),
-      );
-      if (c.latest_sequence !== null && c.analyzed_sequence < c.latest_sequence)
-        meta.append(
-          el(
-            "p",
-            "Есть новые события, которые ещё не вошли в отчёт.",
-            "warning",
-          ),
+      if (goal)
+        info.append(
+          el("p", "Статус цели сообщил Codex: " + time(goal.at), "muted"),
         );
       if (!c.initial_history_fully_read)
-        meta.append(
-          el(
-            "p",
-            "Исходная история ещё дочитывается; это промежуточный отчёт.",
-            "warning",
-          ),
-        );
-      if (state.analyzing)
-        meta.append(
-          el("p", "● Анализируется новая порция журнала…", "warning"),
-        );
+        info.append(el("p", "История ещё дочитывается", "warning"));
+      if (state.next_check_at)
+        info.append(el("p", "Проверка: " + time(state.next_check_at), "muted"));
+      meta.append(info);
       for (const err of [state.error, state.export_error])
         if (err) meta.append(el("p", err, "error"));
       root.append(meta);
       const r = state.report;
       if (!r) {
-        const waiting = card("Готовится первый отчёт");
+        const waiting = card("◌ Готовится первый отчёт");
         waiting.classList.add("full");
-        waiting.append(
-          el(
-            "p",
-            "Сервис читает историю выбранной сессии. Эта страница обновится автоматически.",
-          ),
-        );
         root.append(waiting);
       } else {
         const summary = card("Задание");
         summary.classList.add("full");
-        summary.append(el("p", r.goal));
-        summary.append(el("p", r.summary.text));
-        evidence(summary, r.summary.refs, "summary");
+        summary.append(el("strong", r.goal));
         if (r.scope_changed)
-          summary.append(el("p", "Объём задания изменился", "scope"));
-        root.append(summary, progressCard(r), historyCard());
-        const facts = card("Результаты и следующие шаги");
-        facts.classList.add("full");
+          summary.append(el("span", "↻ Объём изменился", "badge scope"));
+        if (current && goal?.status !== "complete" && r.current_action) {
+          const action = cut(
+            "▶ " +
+              r.current_action.text.slice(0, 120) +
+              (r.current_action.text.length > 120 ? "…" : ""),
+            "current-action",
+          );
+          action.append(el("p", r.current_action.text));
+          evidence(action, r.current_action.refs, "current-evidence");
+          summary.append(action);
+        }
+        const overview = cut("Сводка", "overview");
+        overview.append(el("p", r.summary.text));
+        evidence(overview, r.summary.refs, "summary");
+        summary.append(overview);
+        root.append(summary);
+        const assessment = el("div", undefined, "grid full");
+        assessment.append(progressCard(r), historyCard());
+        if (!current) {
+          const archive = cut(
+            "Оценки по архивному срезу",
+            "archive-assessment",
+          );
+          archive.className = "card full";
+          archive.append(assessment);
+          root.append(archive);
+        } else root.append(assessment);
+        const tasks = tasksCard(r);
+        if (!current || closed) {
+          const archive = cut(
+            `${current ? "Последняя оценка задач" : "Задачи архивного среза"} · ${r.tasks.length}`,
+            "archive-tasks",
+          );
+          archive.className = "card full";
+          archive.append(tasks);
+          root.append(archive);
+        } else root.append(tasks);
+        const facts = cut(
+          `Подробности · ✓ ${r.done.length} · ○ ${r.remaining.length}`,
+          "facts",
+        );
+        facts.className = "card full";
         claims(facts, "Сделано", r.done);
         claims(facts, "Осталось", r.remaining);
-        claims(
-          facts,
-          "Последняя наблюдаемая работа",
-          r.current_action ? [r.current_action] : [],
-        );
-        claims(facts, "Блокеры", r.blockers);
+        if (!current)
+          claims(
+            facts,
+            "Последнее действие архивного среза",
+            r.current_action ? [r.current_action] : [],
+          );
         facts.append(el("p", r.uncertainty, "muted"));
-        root.append(facts, tasksCard(r));
+        root.append(facts);
+        if (r.blockers.length) {
+          const blockers = card(
+            current ? "! Блокеры" : "! Блокеры архивного среза",
+          );
+          blockers.classList.add("full");
+          claims(blockers, "", r.blockers);
+          if (current && goal?.status !== "complete") root.append(blockers);
+          else facts.append(blockers);
+        }
       }
       app.replaceChildren(root);
       for (const d of app.querySelectorAll("details"))
