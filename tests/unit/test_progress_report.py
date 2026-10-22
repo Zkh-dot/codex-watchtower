@@ -270,8 +270,30 @@ async def test_failure_keeps_previous_and_retries_later(engine, failure):
     await engine.assess()
     assert engine.snapshot()["version"] == version
     assert engine.snapshot()["error"]
+    if isinstance(failure, RuntimeError):
+        assert "вход" not in engine.snapshot()["error"]
     assert not engine.due(time.time())
     assert engine.due(time.time() + 601)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_analysis_is_not_a_cli_failure(engine):
+    engine.ingest()
+    started = asyncio.Event()
+
+    async def assess(packet, model):
+        started.set()
+        await asyncio.Future()
+
+    engine.assessor = assess
+    task = asyncio.create_task(engine.assess())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert engine.snapshot()["error"] is None
+    assert engine.snapshot()["analyzing"] is False
+    assert engine.due(time.time())
 
 
 @pytest.mark.asyncio

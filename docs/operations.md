@@ -152,6 +152,10 @@ disables buffering for streaming updates. The backend remains bound to loopback.
 Validate with `nginx -t` before reloading. Run the report under systemd with
 `Restart=on-failure`, enable it for boot, and keep config, HTML and state outside
 `/tmp`. Supply the user's HOME and a PATH containing both Codex CLI and Node.
+Set `KillSignal=SIGINT`, `KillMode=mixed` and `TimeoutStopSec=15` on the report
+unit. This signals the main process first so it cancels its model subprocess
+without recording a CLI failure. The default `control-group` mode also signals
+Codex immediately, which can store a false failure and delay the next analysis.
 
 The live header searches `/sessions?q=...` by folder, ID and title, with a 15-second
 catalog cache and at most 20 results. Only sessions started within the last seven

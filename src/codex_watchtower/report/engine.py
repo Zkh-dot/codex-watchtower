@@ -227,7 +227,7 @@ class ReportEngine:
                 "ValidationError": "Ответ модели не соответствует схеме",
                 "ValueError": "Неверные подтверждения или превышен бюджет контекста",
                 "FileNotFoundError": "Codex CLI не найден в PATH",
-                "RuntimeError": "Codex CLI завершился с ошибкой; проверьте версию и вход в аккаунт",
+                "RuntimeError": "Вызов модели через Codex CLI не выполнен",
             }.get(type(exc).__name__, "Не удалось выполнить анализ")
             self.repo.update_progress_source(
                 self.session_id,
