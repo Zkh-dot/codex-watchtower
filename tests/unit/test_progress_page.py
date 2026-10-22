@@ -134,7 +134,8 @@ assert(visibleText(app).includes('60–74%')); // resumed goals regain their cur
    calls.push([url,options]);
    return {ok:true,json:async()=>options ? selected : [{key:'a'.repeat(24),
      title:'<script>untrusted</script>',workspace:'/home/user/mtg',session_id:'another-session',
-     started_at:'2026-10-22T08:00:00Z'}]};
+     started_at:'2026-10-22T08:00:00Z'}, {key:'b'.repeat(24),title:'Текущая сессия',
+     workspace:'/home/user/mtg',session_id:'fixture',started_at:'2026-10-22T08:00:00Z'}]};
  };
  setupSessionPicker();assert.equal(elements['session-picker'].hidden,false);
  elements['session-search'].value='mtg заголовок';
@@ -144,11 +145,16 @@ assert(visibleText(app).includes('60–74%')); // resumed goals regain their cur
  assert.equal(new URL(calls[0][0], 'http://127.0.0.1/codex-watchtower/').pathname,
               '/codex-watchtower/sessions');
  const button=elements['session-results'].children[0];
+ const previousButton=elements['session-results'].children[1];
+ assert.equal(button['aria-current'],'false');
+ assert.equal(previousButton['aria-current'],'true');
  assert.equal(button.children[0].textContent,'<script>untrusted</script>');
  await button.handlers.click();
  assert.equal(calls[1][0],'session');
  assert.equal(JSON.parse(calls[1][1].body).key,'a'.repeat(24));
  assert.equal(state.session_id,'another-session');assert.equal(lastVersion,0);
+ assert.equal(button['aria-current'],'true');
+ assert.equal(previousButton['aria-current'],'false');
  assert.equal(elements['session-heading'].textContent,'Другая задача');
  assert.equal(elements['session-id'].textContent,'ID: another-session');
  assert.equal(elements['session-workspace'].textContent,'/home/user/demo');
@@ -157,6 +163,10 @@ assert(visibleText(app).includes('60–74%')); // resumed goals regain their cur
  const late=JSON.parse(JSON.stringify(initial));late.version=999;late.selection_revision=0;
  render(late);assert.equal(app.children[0],currentRoot); // old SSE cannot undo selection
  assert.equal(state.session_id,'another-session');
+ const remote=JSON.parse(JSON.stringify(initial));remote.selection_revision=2;
+ render(remote); // a selection arriving from another tab updates the visible search markers
+ assert.equal(button['aria-current'],'false');
+ assert.equal(previousButton['aria-current'],'true');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
     subprocess.run(

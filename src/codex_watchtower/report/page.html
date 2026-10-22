@@ -205,6 +205,20 @@
     .session-result small {
       display: block;
     }
+    .session-current {
+      display: none;
+      margin-left: 8px;
+      font-size: 12px;
+      color: var(--accent);
+      white-space: nowrap;
+    }
+    .session-result[aria-current="true"] {
+      border-color: var(--accent);
+      box-shadow: inset 3px 0 var(--accent);
+    }
+    .session-result[aria-current="true"] .session-current {
+      display: inline;
+    }
     .compact-note {
       font-size: 12px;
     }
@@ -655,6 +669,7 @@
       previousSignature = signature;
       lastVersion = next.version;
       state = next;
+      markSelectedSession();
       const title = state.session_title || "Без названия";
       document.getElementById("session-heading").textContent = title;
       document.getElementById("session-id").textContent =
@@ -881,6 +896,13 @@
         }
       };
     }
+    function markSelectedSession() {
+      for (const button of document.getElementById("session-results").children)
+        button.setAttribute(
+          "aria-current",
+          String(button.dataset.sessionId === state.session_id),
+        );
+    }
     function setupSessionPicker() {
       const picker = document.getElementById("session-picker"),
         form = document.getElementById("session-form"),
@@ -910,6 +932,7 @@
           for (const row of rows) {
             const button = el("button", undefined, "session-result");
             button.type = "button";
+            button.dataset.sessionId = row.session_id;
             button.append(
               el(
                 "strong",
@@ -917,6 +940,7 @@
                   ? row.title.slice(0, 120) + "…"
                   : row.title,
               ),
+              el("span", "✓ Открыта", "session-current"),
               el("small", `${row.workspace} · ${time(row.started_at)}`),
               el("small", "ID: " + row.session_id),
             );
@@ -948,6 +972,7 @@
             });
             results.append(button);
           }
+          markSelectedSession();
         } catch {
           if (id === requestId)
             status.textContent = "Поиск недоступен. Повторите попытку.";
