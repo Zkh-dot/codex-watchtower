@@ -257,11 +257,18 @@ class ReportEngine:
             (self.session_id,),
         ).fetchone()
         turn = self.repo.connection.execute(
-            "SELECT source_type FROM normalized_events WHERE session_id=? "
+            "SELECT source_type, timestamp FROM normalized_events WHERE session_id=? "
             "AND kind='turn_lifecycle' ORDER BY event_sequence DESC LIMIT 1",
             (self.session_id,),
         ).fetchone()
+        turn_start = self.repo.connection.execute(
+            "SELECT event_sequence FROM normalized_events WHERE session_id=? "
+            "AND kind='turn_lifecycle' AND source_type='turn_started' "
+            "ORDER BY event_sequence DESC LIMIT 1",
+            (self.session_id,),
+        ).fetchone()
         goal = None
+        goal_sequence = -1
         candidates = self.repo.connection.execute(
             "SELECT logical_event_id, event_sequence, timestamp, summary FROM normalized_events "
             "WHERE session_id=? AND kind='command_result' "
@@ -303,6 +310,7 @@ class ReportEngine:
                 self.session_id,
             ):
                 goal.update({"at": row["timestamp"], "ref": row["logical_event_id"]})
+                goal_sequence = row["event_sequence"]
                 break
         analyzed = self.repo.connection.execute(
             "SELECT timestamp FROM normalized_events WHERE session_id=? AND event_sequence=?",
@@ -315,6 +323,13 @@ class ReportEngine:
             "session_workspace": self.session_workspace,
             "report": report,
             "reported_goal": goal,
+            "work_after_goal": bool(
+                goal
+                and goal["status"] == "complete"
+                and turn_start
+                and turn_start["event_sequence"] > goal_sequence
+            ),
+            "last_turn_at": turn["timestamp"] if turn else None,
             "report_through_at": analyzed["timestamp"] if analyzed else None,
             "report_is_current": bool(
                 latest

@@ -148,6 +148,9 @@ lags behind the ingested journal, old estimates and tasks are collapsed and mark
 as historical; they are not presented as current work or changed to 100% completion.
 For a completed goal, the percentage and ETA cards are removed entirely. Prior
 estimates remain only in a collapsed history labelled with the covered event date.
+When a new turn starts after goal completion, the page shows resumed session work
+and labels that completion as the previous goal. Historical estimates stay hidden
+until a current report covers the new work.
 
 The page header searches local sessions by folder, full or partial ID, and title.
 Results include only user sessions started in the last seven days, up to 20 matches.

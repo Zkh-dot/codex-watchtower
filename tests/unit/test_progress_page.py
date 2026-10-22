@@ -123,7 +123,18 @@ completed.version=4;completed.report_is_current=true;render(completed);
 assert(visibleText(app).includes('Последняя оценка задач'));
 assert(!visibleText(app).includes('▶ В работе'));
 assert(!allText(app).includes('60–74%')); // applies even after analysis catches up
-completed.version=5;completed.reported_goal.status='active';render(completed);
+completed.version=5;completed.work_after_goal=true;completed.last_turn_state='active_turn';
+completed.last_turn_at='2026-10-22T09:06:00Z';completed.report_is_current=false;render(completed);
+assert(visibleText(app).includes('▶ Ведётся работа'));
+assert(visibleText(app).includes('Предыдущая цель завершена'));
+assert(!visibleText(app).includes('✓ Цель завершена'));
+assert(!allText(app).includes('60–74%')); // resumed work cannot revive obsolete estimates
+completed.version=6;completed.last_turn_state='between_turns';render(completed);
+assert(!visibleText(app).includes('▶ Ведётся работа'));
+assert(visibleText(app).includes('Ход завершён'));
+completed.version=7;completed.report_is_current=true;render(completed);
+assert(visibleText(app).includes('60–74%')); // a current report can assess the new work
+completed.version=8;completed.reported_goal.status='active';render(completed);
 assert(visibleText(app).includes('60–74%')); // resumed goals regain their current estimate
 (async()=>{
  const selected=JSON.parse(JSON.stringify(initial));selected.session_id='another-session';

@@ -171,8 +171,12 @@ The header reads structured, session-matching Codex goal results from ingested
 events independently of the model cursor. A reported completed goal can therefore
 appear while historical analysis continues. Goal completion is Codex-reported,
 not an independent acceptance check or process-exit signal. Prose and statuses for
-other sessions do not set this indicator. If no structured status is available,
-the header says unknown. Stale task lists and estimates stay under historical
+other sessions do not set this indicator. Turn lifecycle events also drive the
+session activity indicator. A new turn starting after completion makes that goal
+historical; its closing event alone does not. The page shows work while the new
+turn is active, then turn completion, independently of the older goal status.
+Without goal or turn evidence, the status is unknown. Stale task lists and
+estimates stay under historical
 disclosures; only a fully caught-up assessment is presented as current work.
 
 The state directory is `state_dir/progress/`. Each absolute source path has a hashed

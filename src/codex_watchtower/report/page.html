@@ -689,6 +689,11 @@
       const meta = el("section", undefined, "card full");
       const line = el("div", undefined, "meta-line");
       const goal = state.reported_goal;
+      const resumed =
+        goal?.status === "complete" && state.work_after_goal === true;
+      const working =
+        state.last_turn_state === "active_turn" &&
+        (!goal || goal.status === "active" || resumed);
       const goalLabels = {
         complete: "✓ Цель завершена",
         active: "▶ Цель активна",
@@ -698,16 +703,36 @@
       line.append(
         el(
           "strong",
-          goal ? goalLabels[goal.status] : "? Статус цели неизвестен",
-          goal?.status === "complete" ? "good" : "",
+          working
+            ? "▶ Ведётся работа"
+            : resumed
+              ? "Ⅱ Ход завершён"
+              : goal
+                ? goalLabels[goal.status]
+                : "? Статус цели неизвестен",
+          working
+            ? "current"
+            : !resumed && goal?.status === "complete"
+              ? "good"
+              : "",
         ),
       );
+      if (resumed)
+        line.append(el("span", "✓ Предыдущая цель завершена", "badge muted"));
       if (state.analyzing)
         line.append(el("span", "◌ Анализ истории", "badge warning"));
       meta.append(line);
       const c = state.coverage;
       const current = state.report_is_current === true;
-      const closed = goal?.status === "complete";
+      const closed = goal?.status === "complete" && (!resumed || !current);
+      if (resumed && !current)
+        meta.append(
+          el(
+            "p",
+            "Новая работа ещё не вошла в модельный отчёт.",
+            "warning compact-note",
+          ),
+        );
       const total = c.latest_sequence === null ? 0 : c.latest_sequence + 1;
       const covered = Math.max(0, c.analyzed_sequence + 1);
       if (!current) {
@@ -758,6 +783,14 @@
         info.append(
           el("p", "Статус цели сообщил Codex: " + time(goal.at), "muted"),
         );
+      if (state.last_turn_at)
+        info.append(
+          el(
+            "p",
+            "Последнее изменение хода: " + time(state.last_turn_at),
+            "muted",
+          ),
+        );
       if (!c.initial_history_fully_read)
         info.append(el("p", "История ещё дочитывается", "warning"));
       if (state.next_check_at)
@@ -772,12 +805,12 @@
         waiting.classList.add("full");
         root.append(waiting);
       } else {
-        const summary = card("Задание");
+        const summary = card(current ? "Задание" : "Задание архивного среза");
         summary.classList.add("full");
         summary.append(el("strong", r.goal));
         if (r.scope_changed)
           summary.append(el("span", "↻ Объём изменился", "badge scope"));
-        if (current && goal?.status !== "complete" && r.current_action) {
+        if (current && !closed && r.current_action) {
           const action = cut(
             "▶ " +
               r.current_action.text.slice(0, 120) +
@@ -802,7 +835,9 @@
           history.append(
             el(
               "p",
-              "Цель завершена. Прежние оценки отражают прошлые этапы, а не итог работы.",
+              resumed
+                ? "Прежние оценки не охватывают возобновлённую работу."
+                : "Цель завершена. Прежние оценки отражают прошлые этапы, а не итог работы.",
               "muted",
             ),
             historyCard(),
@@ -852,7 +887,7 @@
           );
           blockers.classList.add("full");
           claims(blockers, "", r.blockers);
-          if (current && goal?.status !== "complete") root.append(blockers);
+          if (current && !closed) root.append(blockers);
           else facts.append(blockers);
         }
       }

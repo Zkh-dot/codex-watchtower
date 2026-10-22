@@ -134,10 +134,61 @@ async def test_goal_completion_is_visible_ahead_of_historical_assessment(engine)
     assert engine.assessor.await_count == 1  # current goal status needs no model call
     restored = ReportEngine(engine.repo, engine.source, engine.output)
     assert restored.snapshot()["reported_goal"] == snapshot["reported_goal"]
+    assert not snapshot["work_after_goal"]
+    with engine.source.open("a") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "timestamp": "2026-10-22T09:05:01Z",
+                    "payload": {"type": "task_complete"},
+                }
+            )
+            + "\n"
+        )
+    engine.ingest()
+    assert not engine.snapshot()["work_after_goal"]  # closing the original turn is not new work
+    with engine.source.open("a") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "timestamp": "2026-10-22T09:06:00Z",
+                    "payload": {"type": "task_started", "turn_id": "new-work"},
+                }
+            )
+            + "\n"
+        )
+    engine.ingest()
+    resumed = engine.snapshot()
+    assert resumed["reported_goal"]["status"] == "complete"
+    assert resumed["work_after_goal"] is True
+    assert resumed["last_turn_state"] == "active_turn"
+    assert resumed["last_turn_at"] == "2026-10-22T09:06:00Z"
+    assert engine.assessor.await_count == 1
+    with engine.source.open("a") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "timestamp": "2026-10-22T09:07:00Z",
+                    "payload": {"type": "task_complete", "turn_id": "new-work"},
+                }
+            )
+            + "\n"
+        )
+    engine.ingest()
+    assert engine.snapshot()["work_after_goal"] is True
+    assert engine.snapshot()["last_turn_state"] == "between_turns"
     with engine.source.open("a") as stream:
         stream.write(json.dumps(goal_output("active", engine.session_id)) + "\n")
     engine.ingest()
     assert engine.snapshot()["reported_goal"]["status"] == "active"
+    assert not engine.snapshot()["work_after_goal"]
+    with engine.source.open("a") as stream:
+        stream.write(json.dumps(goal_output("complete", engine.session_id)) + "\n")
+    engine.ingest()
+    assert not engine.snapshot()["work_after_goal"]  # a newer completion replaces the previous goal
 
 
 def test_goal_status_does_not_come_from_prose_or_another_thread():
