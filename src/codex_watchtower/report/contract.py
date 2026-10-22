@@ -10,6 +10,12 @@ Refs = Annotated[
 ]
 
 
+class ReportValidationError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -87,8 +93,12 @@ def validate_evidence(
     report: ProgressReport, allowed_refs: set[str], previous: ProgressReport | None
 ) -> None:
     if report.references() - allowed_refs:
-        raise ValueError("report cites events outside the observation packet")
+        raise ReportValidationError(
+            "unknown_refs", "report cites events outside the observation packet"
+        )
     if previous:
         old = {task.id for task in previous.tasks}
         if old - {task.id for task in report.tasks}:
-            raise ValueError("previous tasks must be retained, inactive if excluded from scope")
+            raise ReportValidationError(
+                "missing_tasks", "previous tasks must be retained, inactive if excluded from scope"
+            )

@@ -597,3 +597,99 @@ def test_partial_initial_line_does_not_spin_ingestion(engine):
     assert engine.bootstrap_target is None
     assert not engine.due(time.time())
     assert not engine.ingest()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["missing_tasks", "unknown_refs", "report_too_large", "schema"])
+async def test_invalid_model_report_is_corrected_without_waiting_five_minutes(engine, reason):
+    engine.ingest()
+    ref = engine.repo.progress_events(engine.session_id, -1)[-1]["logical_event_id"]
+    valid = report_for(ref)
+    engine.assessor = AsyncMock(return_value=valid)
+    await engine.assess(live=True)
+    append(engine)
+    engine.ingest()
+    invalid: ProgressReport | Exception
+    if reason == "missing_tasks":
+        invalid = valid.model_copy(update={"tasks": []})
+    elif reason == "unknown_refs":
+        invalid = valid.model_copy(
+            update={
+                "summary": valid.summary.model_copy(update={"refs": ["invented"]}),
+            }
+        )
+    elif reason == "report_too_large":
+        invalid = valid.model_copy(
+            update={
+                "tasks": [valid.tasks[0]]
+                + [
+                    valid.tasks[0].model_copy(
+                        update={
+                            "id": f"extra_{i}",
+                            "title": "x" * 160,
+                            "comment": "x" * 600,
+                        }
+                    )
+                    for i in range(39)
+                ]
+            }
+        )
+    else:
+        try:
+            ProgressReport.model_validate({})
+        except ValidationError as exc:
+            invalid = exc
+    engine.assessor = AsyncMock(side_effect=[invalid, valid])
+    await engine.assess(live=True)
+    assert engine.assessor.await_count == 2
+    retry_packet = json.loads(engine.assessor.await_args_list[1].args[0])
+    assert retry_packet["validation_feedback"]["reason"] == reason
+    assert len(engine.assessor.await_args_list[1].args[0]) <= PACKET_BUDGET
+    assert engine.snapshot()["error"] is None
+    assert engine.snapshot()["report_is_current"]
+
+
+@pytest.mark.asyncio
+async def test_repeated_invalid_report_has_specific_safe_error(engine):
+    engine.ingest()
+    ref = engine.repo.progress_events(engine.session_id, -1)[-1]["logical_event_id"]
+    valid = report_for(ref)
+    engine.assessor = AsyncMock(return_value=valid)
+    await engine.assess(live=True)
+    version = engine.snapshot()["version"]
+    append(engine)
+    engine.ingest()
+    engine.assessor = AsyncMock(return_value=valid.model_copy(update={"tasks": []}))
+    await engine.assess(live=True)
+    assert engine.assessor.await_count == 2
+    assert engine.snapshot()["version"] == version
+    assert "задач" in engine.snapshot()["error"]
+    assert "бюджет" not in engine.snapshot()["error"]
+
+
+@pytest.mark.asyncio
+async def test_correction_shares_the_original_deadline(engine, monkeypatch):
+    import codex_watchtower.report.engine as module
+
+    engine.ingest()
+    ref = engine.repo.progress_events(engine.session_id, -1)[-1]["logical_event_id"]
+    valid = report_for(ref)
+    engine.assessor = AsyncMock(return_value=valid)
+    await engine.assess(live=True)
+    append(engine)
+    engine.ingest()
+    monkeypatch.setattr(module, "LIVE_TIMEOUT", 0.05)
+    calls = 0
+
+    async def slow_invalid(packet, model):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.035)
+        return valid.model_copy(update={"tasks": []})
+
+    engine.assessor = slow_invalid
+    start = time.monotonic()
+    await engine.assess(live=True)
+    assert calls == 2
+    assert time.monotonic() - start < 0.15
+    assert "время" in engine.snapshot()["error"]

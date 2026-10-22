@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from collections.abc import Awaitable, Callable
@@ -11,13 +12,19 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from codex_watchtower.codex.discovery import read_session_meta, session_title
 from codex_watchtower.codex.goal import reported_goal
 from codex_watchtower.codex.normalize import normalize_record
 from codex_watchtower.codex.tailer import IdentityBroken, read_new_records, resolve_start
 from codex_watchtower.models.codex_cli import run_codex
 from codex_watchtower.privacy.redact import redact_text
-from codex_watchtower.report.contract import ProgressReport, validate_evidence
+from codex_watchtower.report.contract import (
+    ProgressReport,
+    ReportValidationError,
+    validate_evidence,
+)
 from codex_watchtower.storage.repository import Repository
 
 PACKET_BUDGET = 48_000
@@ -173,6 +180,7 @@ class ReportEngine:
         assert source_state is not None
         packet: dict[str, Any] = {
             "session_id": self.session_id,
+            "validation_feedback": None,
             "previous_report": previous.model_dump() if previous else None,
             "previous_evidence": [
                 {"id": row["logical_event_id"], "summary": row["summary"][: 1200 if live else 160]}
@@ -224,7 +232,7 @@ class ReportEngine:
             packet["coverage"]["included_events"] = len(packet["events"])
             packet["coverage"]["omitted_events"] = available - len(packet["events"])
             packet["coverage"]["through_sequence"] = row["event_sequence"]
-            if len(encode()) > PACKET_BUDGET:
+            if len(encode()) > PACKET_BUDGET - 512:
                 packet["events"].pop()
                 break
         if not packet["events"]:
@@ -285,16 +293,37 @@ class ReportEngine:
         try:
             async with asyncio.timeout(LIVE_TIMEOUT):
                 packet, cursor, previous = self.packet(live=live)
-                if self.assessor is run_codex:
-                    report = await run_codex(packet, self.model, fast=self.fast)
-                else:
-                    report = await self.assessor(packet, self.model)
-            refs = {event["id"] for event in json.loads(packet)["events"]}
-            refs.update(event["id"] for event in json.loads(packet)["previous_evidence"])
-            validate_evidence(report, refs, previous)
-            body = report.model_dump_json()
-            if len(body) > MAX_REPORT_CHARACTERS:
-                raise ValueError("report exceeds the 24000 character incremental context limit")
+                data = json.loads(packet)
+                refs = {event["id"] for event in data["events"] + data["previous_evidence"]}
+                for attempt in range(2):
+                    try:
+                        if self.assessor is run_codex:
+                            report = await run_codex(packet, self.model, fast=self.fast)
+                        else:
+                            report = await self.assessor(packet, self.model)
+                        validate_evidence(report, refs, previous)
+                        body = report.model_dump_json()
+                        if len(body) > MAX_REPORT_CHARACTERS:
+                            raise ReportValidationError(
+                                "report_too_large", "report exceeds the incremental context limit"
+                            )
+                        break
+                    except (ReportValidationError, ValidationError) as exc:
+                        code = exc.code if isinstance(exc, ReportValidationError) else "schema"
+                        logging.getLogger(__name__).warning(
+                            "report rejected: mode=%s reason=%s attempt=%d",
+                            self.analysis_mode,
+                            code,
+                            attempt + 1,
+                        )
+                        if attempt:
+                            raise
+                        data["validation_feedback"] = {
+                            "reason": code,
+                            "max_report_characters": MAX_REPORT_CHARACTERS,
+                        }
+                        # The packet reserves room for feedback; both attempts share one deadline.
+                        packet = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
             # Redact string values before serialization so secret removal cannot break JSON.
             body = json.dumps(
                 json.loads(
@@ -327,10 +356,16 @@ class ReportEngine:
             reason = {
                 "TimeoutError": "Модель превысила время ожидания",
                 "ValidationError": "Ответ модели не соответствует схеме",
-                "ValueError": "Неверные подтверждения или превышен бюджет контекста",
+                "ValueError": "Не удалось проверить данные отчёта",
                 "FileNotFoundError": "Codex CLI не найден в PATH",
                 "RuntimeError": "Вызов модели через Codex CLI не выполнен",
             }.get(type(exc).__name__, "Не удалось выполнить анализ")
+            if isinstance(exc, ReportValidationError):
+                reason = {
+                    "unknown_refs": "Модель сослалась на события вне переданного журнала",
+                    "missing_tasks": "Модель потеряла часть прежних задач при обновлении отчёта",
+                    "report_too_large": "Ответ модели превысил лимит 24 000 символов",
+                }[exc.code]
             error = f"{reason}. Последний успешный отчёт сохранён."
             if live:
                 self.repo.connection.execute(
