@@ -268,3 +268,16 @@ def test_read_new_records_uses_open_safe_when_sessions_root_given(tmp_path: Path
     )
     with pytest.raises(tailer.TailerSafetyError):
         tailer.read_new_records(link, cursor, sessions_root=root)
+
+
+def test_changed_prefix_between_validation_and_read_is_rejected(tmp_path):
+    from codex_watchtower.codex.tailer import TailerSafetyError
+
+    path = tmp_path / "rollout.jsonl"
+    path.write_text('{"one": 1}\n')
+    cursor = tailer.resolve_start(path, None)
+    first = tailer.read_new_records(path, cursor)
+    checked = tailer.resolve_start(path, first.cursor)
+    path.write_text('{"two": 2}\n')
+    with pytest.raises(TailerSafetyError, match="prefix changed"):
+        tailer.read_new_records(path, checked)

@@ -1,0 +1,106 @@
+"""Real loopback server and CLI lifecycle, with a deterministic offline model stub."""
+
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+
+import httpx
+
+from tests.unit.test_progress_report import FIXTURE, report_for
+
+
+def test_report_command_http_sse_export_and_shutdown(tmp_path):
+    source = tmp_path / "rollout.jsonl"
+    source.write_bytes(FIXTURE.read_bytes())
+    config = tmp_path / "config.toml"
+    state = tmp_path / "state"
+    config.write_text(f'sessions_root="{tmp_path}"\nstate_dir="{state}"\n')
+    output = tmp_path / "report.html"
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    stub = bindir / "codex"
+    template = report_for("placeholder").model_dump()
+    stub.write_text(
+        f"#!{sys.executable}\n"
+        "import json,sys,pathlib\n"
+        'if "--version" in sys.argv:\n'
+        ' print("codex-cli 0.163.0");sys.exit(0)\n'
+        'packet=json.loads(sys.stdin.read().split("OBSERVATION DATA:\\n",1)[1])\n'
+        f"report=json.loads({json.dumps(template)!r})\n"
+        'ref=packet["events"][-1]["id"]\n'
+        'for c in [report["summary"],*report["done"],*report["remaining"],'
+        'report["current_action"],*report["tasks"]]: c["refs"]=[ref]\n'
+        'pathlib.Path(sys.argv[sys.argv.index("-o")+1]).write_text(json.dumps(report))\n'
+    )
+    stub.chmod(0o700)
+    env = {**os.environ, "PATH": str(bindir) + os.pathsep + os.environ["PATH"]}
+    with (tmp_path / "stdout").open("w+") as stdout, (tmp_path / "stderr").open("w+") as stderr:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "codex_watchtower.cli",
+                "report",
+                "--config",
+                str(config),
+                "--log",
+                str(source),
+                "--output",
+                str(output),
+            ],
+            stdout=stdout,
+            stderr=stderr,
+            env=env,
+        )
+        try:
+            url = None
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                stdout.seek(0)
+                lines = stdout.read().splitlines()
+                url = next(
+                    (
+                        line.removeprefix("Report: ")
+                        for line in lines
+                        if line.startswith("Report: ")
+                    ),
+                    None,
+                )
+                if url:
+                    break
+                assert process.poll() is None
+                time.sleep(0.05)
+            assert url and url.startswith("http://127.0.0.1:")
+            with httpx.Client(base_url=url, timeout=15, trust_env=False) as client:
+                deadline = time.monotonic() + 15
+                snapshot = client.get("/report.json").json()
+                while snapshot["version"] == 0 and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                    snapshot = client.get("/report.json").json()
+                assert snapshot["version"] == 1, snapshot
+                page = client.get("/")
+                assert page.status_code == 200 and "EventSource" in page.text
+                assert "__INITIAL_SNAPSHOT__" not in output.read_text()
+                for _ in range(2):
+                    with client.stream(
+                        "GET", "/events", headers={"Last-Event-ID": "old"}
+                    ) as stream:
+                        for line in stream.iter_lines():
+                            if line.startswith("data: "):
+                                assert json.loads(line[6:])["version"] == 1
+                                break
+                assert client.get("/rollout.jsonl").status_code == 404
+        finally:
+            process.send_signal(signal.SIGINT)
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        assert process.returncode == 0
+        assert output.exists()

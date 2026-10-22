@@ -1,0 +1,275 @@
+{
+  "$defs": {
+    "Claim": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "maxLength": 600,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "refs": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "text",
+        "refs"
+      ],
+      "title": "Claim",
+      "type": "object"
+    },
+    "ETA": {
+      "additionalProperties": false,
+      "properties": {
+        "low_minutes": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Low Minutes",
+          "type": "integer"
+        },
+        "high_minutes": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "High Minutes",
+          "type": "integer"
+        },
+        "confidence": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "assumption": {
+          "maxLength": 600,
+          "minLength": 1,
+          "title": "Assumption",
+          "type": "string"
+        }
+      },
+      "required": [
+        "low_minutes",
+        "high_minutes",
+        "confidence",
+        "assumption"
+      ],
+      "title": "ETA",
+      "type": "object"
+    },
+    "Progress": {
+      "additionalProperties": false,
+      "properties": {
+        "low": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Low",
+          "type": "integer"
+        },
+        "high": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "High",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "low",
+        "high"
+      ],
+      "title": "Progress",
+      "type": "object"
+    },
+    "Task": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-zA-Z0-9_-]{1,64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "in_progress",
+            "done",
+            "blocked",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "plan",
+            "user",
+            "inferred"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "active": {
+          "title": "Active",
+          "type": "boolean"
+        },
+        "comment": {
+          "maxLength": 600,
+          "minLength": 1,
+          "title": "Comment",
+          "type": "string"
+        },
+        "refs": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Refs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "status",
+        "origin",
+        "active",
+        "comment",
+        "refs"
+      ],
+      "title": "Task",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "goal": {
+      "maxLength": 600,
+      "minLength": 1,
+      "title": "Goal",
+      "type": "string"
+    },
+    "scope_changed": {
+      "title": "Scope Changed",
+      "type": "boolean"
+    },
+    "summary": {
+      "$ref": "#/$defs/Claim"
+    },
+    "done": {
+      "items": {
+        "$ref": "#/$defs/Claim"
+      },
+      "maxItems": 12,
+      "title": "Done",
+      "type": "array"
+    },
+    "remaining": {
+      "items": {
+        "$ref": "#/$defs/Claim"
+      },
+      "maxItems": 12,
+      "title": "Remaining",
+      "type": "array"
+    },
+    "current_action": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Claim"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "blockers": {
+      "items": {
+        "$ref": "#/$defs/Claim"
+      },
+      "maxItems": 8,
+      "title": "Blockers",
+      "type": "array"
+    },
+    "progress": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Progress"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "progress_reason": {
+      "maxLength": 600,
+      "minLength": 1,
+      "title": "Progress Reason",
+      "type": "string"
+    },
+    "eta": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ETA"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "uncertainty": {
+      "maxLength": 600,
+      "minLength": 1,
+      "title": "Uncertainty",
+      "type": "string"
+    },
+    "tasks": {
+      "items": {
+        "$ref": "#/$defs/Task"
+      },
+      "maxItems": 40,
+      "title": "Tasks",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "goal",
+    "scope_changed",
+    "summary",
+    "done",
+    "remaining",
+    "current_action",
+    "blockers",
+    "progress",
+    "progress_reason",
+    "eta",
+    "uncertainty",
+    "tasks"
+  ],
+  "title": "ProgressReport",
+  "type": "object"
+}

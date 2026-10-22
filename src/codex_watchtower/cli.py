@@ -23,6 +23,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve_parser.add_argument("--config", default=None, help="path to config.toml")
 
+    report_parser = subparsers.add_parser("report", help="live HTML progress for one session")
+    report_parser.add_argument("--config", default=None, help="path to config.toml")
+    source = report_parser.add_mutually_exclusive_group()
+    source.add_argument("--session", help="exact session ID")
+    source.add_argument("--log", help="rollout JSONL path")
+    report_parser.add_argument("--interval", type=int, default=300, help="300–600 seconds")
+    report_parser.add_argument("--output", default="report.html", help="standalone HTML path")
+    report_parser.add_argument("--model", default="gpt-6-luna", help="Codex model identifier")
+
     run_parser = subparsers.add_parser(
         "run", help="wrap a Codex invocation and capture process exit evidence"
     )

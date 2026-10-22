@@ -331,3 +331,18 @@ def test_logical_event_id_does_not_depend_on_prior_duplicate_count() -> None:
     assert different_ordinal_9 is not None
     assert first_pass_ordinal_5.event.id == replayed_ordinal_5.event.id
     assert first_pass_ordinal_5.event.id != different_ordinal_9.event.id
+
+
+def test_malformed_envelope_types_and_naive_timestamp_remain_safe():
+    for parsed in [
+        {"type": ["future"], "payload": {}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": []}}},
+        {
+            "type": "response_item",
+            "timestamp": "2026-10-22T08:00:00",
+            "payload": {"type": "message", "role": "user", "content": []},
+        },
+    ]:
+        normalized = normalize_record("session", _raw(0, parsed), fallback_timestamp=FALLBACK_TS)
+        assert normalized is not None
+        assert normalized.event.timestamp == FALLBACK_TS

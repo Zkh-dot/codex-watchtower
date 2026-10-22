@@ -1094,6 +1094,88 @@ class Repository:
         ).fetchone()
         return row["total"] if row else 0
 
+    # --- selected-session progress reports ---------------------------------
+
+    def init_progress_source(self, session_id: str, path: str, initial_bytes: int) -> None:
+        row = self.get_progress_source(session_id)
+        if row is not None and row["source_path"] != path:
+            raise ValueError("session is already bound to a different report source")
+        self._conn.execute(
+            "INSERT OR IGNORE INTO progress_sources(session_id, source_path,bootstrap_bytes) "
+            "VALUES (?, ?, ?)",
+            (session_id, path, initial_bytes),
+        )
+
+    def get_progress_source(self, session_id: str) -> sqlite3.Row | None:
+        row: sqlite3.Row | None = self._conn.execute(
+            "SELECT * FROM progress_sources WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        return row
+
+    def update_progress_source(
+        self,
+        session_id: str,
+        *,
+        last_attempt_at: float,
+        error: str | None,
+        malformed_delta: int = 0,
+    ) -> None:
+        self._conn.execute(
+            "UPDATE progress_sources SET last_attempt_at=?, error=?, "
+            "malformed_count=malformed_count+? WHERE session_id=?",
+            (last_attempt_at, error, malformed_delta, session_id),
+        )
+
+    def progress_events(self, session_id: str, after: int, limit: int = 200) -> list[sqlite3.Row]:
+        return list(
+            self._conn.execute(
+                "SELECT * FROM normalized_events WHERE session_id=? AND event_sequence>? "
+                "ORDER BY event_sequence LIMIT ?",
+                (session_id, after, limit),
+            )
+        )
+
+    def set_progress_bootstrap(self, session_id: str, target: int | None) -> None:
+        self._conn.execute(
+            "UPDATE progress_sources SET bootstrap_target=COALESCE(bootstrap_target,?) "
+            "WHERE session_id=?",
+            (target, session_id),
+        )
+
+    def progress_evidence(self, session_id: str, refs: set[str]) -> list[sqlite3.Row]:
+        if not refs:
+            return []
+        placeholders = ",".join("?" for _ in refs)
+        return list(
+            self._conn.execute(
+                "SELECT * FROM normalized_events WHERE session_id=? AND logical_event_id IN ("
+                + placeholders
+                + ") ORDER BY event_sequence",
+                (session_id, *sorted(refs)),
+            )
+        )
+
+    def latest_progress(self, session_id: str) -> sqlite3.Row | None:
+        row: sqlite3.Row | None = self._conn.execute(
+            "SELECT * FROM progress_reports WHERE session_id=? ORDER BY version DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        return row
+
+    def progress_history(self, session_id: str) -> list[sqlite3.Row]:
+        return list(
+            self._conn.execute(
+                "SELECT * FROM progress_reports WHERE session_id=? ORDER BY version", (session_id,)
+            )
+        )
+
+    def save_progress(self, session_id: str, cursor: int, assessed_at: str, body: str) -> None:
+        self._conn.execute(
+            "INSERT INTO progress_reports(session_id,event_cursor,assessed_at,body) "
+            "VALUES (?,?,?,?)",
+            (session_id, cursor, assessed_at, body),
+        )
+
 
 def row_to_domain_event(row: sqlite3.Row) -> domain.Event:
     return domain.Event(

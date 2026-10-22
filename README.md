@@ -121,3 +121,48 @@ corpus and its gates exist.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Live session progress report
+
+```bash
+# Uses the installed, authenticated Codex CLI (verified release: 0.163.0).
+uv run watchtower report --session <SESSION_ID> --output ./report.html
+# Or select an explicit rollout, including one outside the default sessions root:
+uv run watchtower report --log /path/to/rollout.jsonl --interval 600
+# Interactive terminal selection:
+uv run watchtower report
+```
+
+Open the printed `http://127.0.0.1:<port>/` address yourself. The OS allocates an
+unused port; the page updates through SSE without reloading. The exported HTML
+contains its own data, styles and SVG charts and also works without the server.
+Stop with Ctrl+C. The browser is never opened automatically.
+
+The Russian report includes evidence-linked results, remaining work, current work
+as last observed, blockers, task statuses, estimated progress and ETA when justified.
+Charts show the estimated range, its history and task counts by status. Task counts
+are not treated as a completion percentage. Missing estimates remain missing.
+
+The first analysis starts immediately. Initial history is folded in bounded batches;
+a partial report shows its coverage. After initial catch-up, analysis runs every
+300–600 seconds (default 300), only when new events exist. One analysis runs at a
+time. Failures preserve the previous report and wait an interval before retrying.
+State, task IDs and timing survive restarts.
+
+The default model is `gpt-6-luna` with medium reasoning; `--model` overrides its ID.
+This uses Codex's saved authentication and **may send redacted log excerpts to the
+model provider and consume your Codex quota**; it does not imply local model weights.
+The report subprocess ignores user/project configuration, runs in an empty temporary
+directory, disables tools, browser, MCP/apps, hooks and session persistence. It uses
+the CLI's default provider rather than custom providers from your user config.
+Only CLI 0.163.0 is accepted until the isolation probe is repeated for another version.
+Recognized secrets are redacted; arbitrary sensitive prose cannot be detected reliably.
+
+`--config` optionally supplies the existing Watchtower `sessions_root` and `state_dir`.
+Without one, the report command uses `~/.codex/sessions` and
+`~/.local/state/codex-watchtower`. Report databases live under `state_dir/progress/`,
+separately from `serve`, and contain redacted evidence excerpts and report history.
+The source session and workspace are never changed.
+
+See [the product specification](docs/specs/2026-10-22-session-progress-report.md)
+and [operations](docs/operations.md#session-progress-reports) for recovery and checks.

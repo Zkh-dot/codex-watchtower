@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="ru">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Codex · Прогресс сессии</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101723;
+      --card: #192334;
+      --text: #eaf0fa;
+      --muted: #a8b7ce;
+      --line: #32435b;
+      --accent: #83b9ff;
+      --good: #81dbb3;
+      --warn: #ffce85;
+      --bad: #ff9caa;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font:
+        16px/1.55 system-ui,
+        sans-serif;
+    }
+    main,
+    header,
+    footer {
+      max-width: 1150px;
+      margin: auto;
+      padding: 24px;
+    }
+    header {
+      padding-bottom: 0;
+    }
+    h1 {
+      font-size: 28px;
+      margin: 8px 0;
+    }
+    h2 {
+      font-size: 19px;
+      margin: 0 0 16px;
+    }
+    h3 {
+      font-size: 15px;
+      margin: 16px 0 8px;
+    }
+    p {
+      margin: 8px 0;
+    }
+    .muted,
+    small {
+      color: var(--muted);
+    }
+    .eyebrow {
+      color: var(--accent);
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    .grid .card {
+      margin: 0;
+    }
+    .full {
+      grid-column: 1/-1;
+    }
+    .number {
+      font-size: 38px;
+      font-weight: 650;
+      color: var(--accent);
+    }
+    .badge {
+      display: inline-block;
+      font-size: 13px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 3px 10px;
+      margin: 3px 6px 3px 0;
+    }
+    .good {
+      color: var(--good);
+    }
+    .warning {
+      color: var(--warn);
+    }
+    .error {
+      color: var(--bad);
+    }
+    .task {
+      border-top: 1px solid var(--line);
+      padding: 16px 0;
+    }
+    .task:first-of-type {
+      border-top: 0;
+    }
+    .task.in_progress {
+      border-left: 3px solid var(--accent);
+      padding-left: 16px;
+    }
+    .task.inactive {
+      opacity: 0.65;
+    }
+    details {
+      margin: 10px 0;
+    }
+    summary {
+      cursor: pointer;
+      color: var(--accent);
+    }
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font:
+        13px/1.5 ui-monospace,
+        monospace;
+      padding: 12px;
+      background: var(--bg);
+      border-radius: 8px;
+    }
+    svg {
+      width: 100%;
+      height: auto;
+      display: block;
+      margin: 14px 0;
+    }
+    ul {
+      padding-left: 22px;
+    }
+    li {
+      margin: 8px 0;
+    }
+    .statusline {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .scope {
+      color: var(--warn);
+    }
+    footer {
+      font-size: 13px;
+      padding-top: 0;
+    }
+    .session {
+      overflow-wrap: anywhere;
+      font:
+        12px ui-monospace,
+        monospace;
+    }
+    a {
+      color: var(--accent);
+    }
+    noscript {
+      display: block;
+      padding: 24px;
+    }
+    @media (max-width: 700px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      main,
+      header,
+      footer {
+        padding: 16px;
+      }
+      .card {
+        padding: 18px;
+      }
+      .number {
+        font-size: 30px;
+      }
+    }
+  </style>
+  <header>
+    <div class="eyebrow">Codex Watchtower / session report</div>
+    <h1>Как продвигается работа</h1>
+    <div class="statusline">
+      <span id="connection" class="badge">Сохранённый снимок</span
+      ><span id="freshness" class="badge"></span>
+    </div>
+  </header>
+  <main id="app" aria-live="polite"></main>
+  <noscript
+    >Для отображения отчёта включите JavaScript. Данные встроены в этот HTML;
+    внешние ресурсы не требуются.</noscript
+  >
+  <footer>
+    Процент и ETA — оценки по журналу. Выполнение цели, завершение хода и
+    завершение процесса различаются. Сервис не проверяет результат независимо от
+    наблюдаемой сессии.
+  </footer>
+  <script id="initial-data" type="application/json">
+    __INITIAL_SNAPSHOT__
+  </script>
+  <script>
+    "use strict";
+    const app = document.getElementById("app"),
+      connection = document.getElementById("connection");
+    const initial = JSON.parse(
+      document.getElementById("initial-data").textContent,
+    );
+    let state = initial,
+      previousSignature = "",
+      lastVersion = 0;
+    const labels = {
+      pending: "○ Ожидает",
+      in_progress: "▶ В работе",
+      done: "✓ Готово",
+      blocked: "! Заблокировано",
+      unknown: "? Неясно",
+    };
+    const colors = {
+      pending: "#a8b7ce",
+      in_progress: "#83b9ff",
+      done: "#81dbb3",
+      blocked: "#ffce85",
+      unknown: "#c1a7ff",
+    };
+    function el(tag, text, cls) {
+      const n = document.createElement(tag);
+      if (text !== undefined) n.textContent = text;
+      if (cls) n.className = cls;
+      return n;
+    }
+    function time(value) {
+      return value ? new Date(value).toLocaleString("ru-RU") : "нет данных";
+    }
+    function card(title) {
+      const n = el("section", undefined, "card");
+      n.append(el("h2", title));
+      return n;
+    }
+    function svgNode(tag, attrs) {
+      const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+      return n;
+    }
+    function chart(label, height) {
+      const s = svgNode("svg", {
+        viewBox: `0 0 600 ${height}`,
+        role: "img",
+        "aria-label": label,
+      });
+      const t = svgNode("title", {});
+      t.textContent = label;
+      s.append(t);
+      return s;
+    }
+    function evidence(parent, refs, key) {
+      if (!refs.length) return;
+      const d = el("details");
+      d.dataset.key = key;
+      d.append(el("summary", "Подтверждения · " + refs.length));
+      for (const ref of refs) {
+        const e = state.evidence.find((x) => x.id === ref);
+        d.append(el("small", e ? time(e.timestamp) + " · " + e.kind : ref));
+        d.append(el("pre", e ? e.summary : "Подтверждение недоступно"));
+      }
+      parent.append(d);
+    }
+    function claims(parent, title, items) {
+      if (!items.length) return;
+      parent.append(el("h3", title));
+      const ul = el("ul");
+      items.forEach((c, i) => {
+        const li = el("li", c.text);
+        evidence(li, c.refs, title + i);
+        ul.append(li);
+      });
+      parent.append(ul);
+    }
+    function progressCard(r) {
+      const n = card("Оценка завершённости");
+      if (!r.progress) {
+        n.append(el("p", "Оценка недоступна", "number"));
+      } else {
+        const p = r.progress;
+        n.append(el("div", `${p.low}–${p.high}%`, "number"));
+        const s = chart(`Оценка от ${p.low} до ${p.high} процентов`, 40);
+        s.append(
+          svgNode("rect", {
+            x: 0,
+            y: 8,
+            width: 600,
+            height: 24,
+            rx: 10,
+            fill: "#32435b",
+          }),
+        );
+        s.append(
+          svgNode("rect", {
+            x: 0,
+            y: 8,
+            width: p.low * 6,
+            height: 24,
+            rx: 10,
+            fill: "#83b9ff",
+          }),
+        );
+        s.append(
+          svgNode("rect", {
+            x: p.low * 6,
+            y: 8,
+            width: (p.high - p.low) * 6,
+            height: 24,
+            fill: "#c2ddff",
+            opacity: 0.5,
+          }),
+        );
+        n.append(s);
+      }
+      n.append(el("p", r.progress_reason, "muted"));
+      if (r.eta) {
+        n.append(
+          el(
+            "h3",
+            `ETA · примерно ${r.eta.low_minutes}–${r.eta.high_minutes} мин`,
+          ),
+        );
+        const confidence = {
+          low: "низкая",
+          medium: "средняя",
+          high: "высокая",
+        };
+        n.append(
+          el(
+            "p",
+            "Уверенность: " +
+              confidence[r.eta.confidence] +
+              ". " +
+              r.eta.assumption,
+          ),
+        );
+      } else n.append(el("p", "ETA: недостаточно оснований", "muted"));
+      return n;
+    }
+    function historyCard() {
+      const n = card("Как менялась оценка");
+      const h = state.history,
+        s = chart("История диапазона прогресса от 0 до 100 процентов", 200);
+      s.append(
+        svgNode("path", {
+          d: "M30 12V170H580",
+          stroke: "#536882",
+          fill: "none",
+        }),
+      );
+      for (const v of [0, 50, 100]) {
+        const t = svgNode("text", {
+          x: 0,
+          y: 173 - v * 1.5,
+          fill: "#a8b7ce",
+          "font-size": 11,
+        });
+        t.textContent = v;
+        s.append(t);
+      }
+      const dates = h.map((x) => Date.parse(x.at)),
+        first = dates[0] || 0,
+        span = Math.max(1, (dates.at(-1) || 0) - first);
+      let run = [];
+      function finish() {
+        if (!run.length) return;
+        const pts = run
+          .map((x) => `${x.x},${170 - x.p.high * 1.5}`)
+          .concat(
+            [...run].reverse().map((x) => `${x.x},${170 - x.p.low * 1.5}`),
+          )
+          .join(" ");
+        s.append(
+          svgNode("polygon", { points: pts, fill: "#83b9ff", opacity: 0.3 }),
+        );
+        s.append(
+          svgNode("polyline", {
+            points: run
+              .map((x) => `${x.x},${170 - (x.p.low + x.p.high) * 0.75}`)
+              .join(" "),
+            stroke: "#83b9ff",
+            fill: "none",
+            "stroke-width": 2,
+          }),
+        );
+        run = [];
+      }
+      h.forEach((point, i) => {
+        const x = 30 + (550 * (dates[i] - first)) / span;
+        if (point.scope_changed) {
+          finish();
+          const marker = svgNode("line", {
+            x1: x,
+            x2: x,
+            y1: 12,
+            y2: 170,
+            stroke: "#ffce85",
+            "stroke-dasharray": "4 4",
+          });
+          const title = svgNode("title", {});
+          title.textContent = time(point.at) + " · изменился объём";
+          marker.append(title);
+          s.append(marker);
+        }
+        if (!point.progress) {
+          finish();
+          return;
+        }
+        run.push({ x, p: point.progress });
+        const c = svgNode("circle", {
+          cx: x,
+          cy: 170 - (point.progress.low + point.progress.high) * 0.75,
+          r: 3,
+          fill: point.scope_changed ? "#ffce85" : "#83b9ff",
+        });
+        const title = svgNode("title", {});
+        title.textContent =
+          time(point.at) + (point.scope_changed ? " · изменился объём" : "");
+        c.append(title);
+        s.append(c);
+      });
+      finish();
+      n.append(s);
+      n.append(
+        el(
+          "small",
+          h.length
+            ? time(h[0].at) + " → " + time(h.at(-1).at)
+            : "Ожидается первый анализ",
+        ),
+      );
+      n.append(
+        el(
+          "p",
+          "Пропуски — оценка недоступна. Жёлтые отметки — изменение объёма задания.",
+          "muted",
+        ),
+      );
+      return n;
+    }
+    function tasksCard(r) {
+      const n = card("План работы");
+      n.classList.add("full");
+      const active = r.tasks.filter((t) => t.active),
+        s = chart("Количество задач по статусам", 34);
+      let x = 0;
+      for (const status of Object.keys(labels)) {
+        const count = active.filter((t) => t.status === status).length;
+        if (count) {
+          const w = (600 * count) / active.length;
+          s.append(
+            svgNode("rect", {
+              x,
+              y: 0,
+              width: w,
+              height: 28,
+              fill: colors[status],
+            }),
+          );
+          x += w;
+        }
+        n.append(el("span", `${labels[status]} · ${count}`, "badge"));
+      }
+      n.append(s);
+      n.append(
+        el(
+          "p",
+          "Распределение задач не является процентом выполнения. «В работе» — по последним наблюдениям.",
+          "muted",
+        ),
+      );
+      for (const t of r.tasks) {
+        const row = el(
+          "article",
+          undefined,
+          "task " + t.status + (t.active ? "" : " inactive"),
+        );
+        row.append(
+          el(
+            "span",
+            t.active ? labels[t.status] : "Исключено из объёма",
+            "badge",
+          ),
+        );
+        row.append(el("strong", t.title));
+        row.append(el("p", t.comment));
+        row.append(
+          el(
+            "small",
+            t.origin === "inferred"
+              ? "Восстановлено моделью"
+              : t.origin === "plan"
+                ? "Из плана агента"
+                : "Из требований пользователя",
+          ),
+        );
+        evidence(row, t.refs, "task-" + t.id);
+        n.append(row);
+      }
+      if (!r.tasks.length) n.append(el("p", "План пока не восстановлен."));
+      return n;
+    }
+    function render(next) {
+      if (next.version < lastVersion) return;
+      const signature = JSON.stringify(next);
+      if (signature === previousSignature) return;
+      previousSignature = signature;
+      lastVersion = next.version;
+      state = next;
+      const opened = new Set(
+          [...app.querySelectorAll("details[open]")].map((x) => x.dataset.key),
+        ),
+        scroll = window.scrollY;
+      const root = el("div", undefined, "grid");
+      const meta = card("Сессия");
+      meta.classList.add("full");
+      meta.append(el("p", state.session_id, "session"));
+      meta.append(
+        el("p", "Последнее событие: " + time(state.last_event_at), "muted"),
+      );
+      meta.append(
+        el(
+          "p",
+          "Успешный анализ: " +
+            time(state.assessed_at) +
+            " · следующая проверка: " +
+            (state.next_check_at
+              ? time(state.next_check_at)
+              : "при новых событиях"),
+          "muted",
+        ),
+      );
+      const turns = {
+        active_turn: "начат",
+        between_turns: "завершён",
+        unknown: "неизвестно",
+      };
+      meta.append(
+        el(
+          "p",
+          "Последний наблюдаемый ход: " +
+            turns[state.last_turn_state] +
+            ". Завершение процесса: не подтверждено. Выполнение цели оценивается ниже.",
+          "muted",
+        ),
+      );
+      const c = state.coverage;
+      meta.append(
+        el(
+          "small",
+          `Покрытие: ${c.analyzed_sequence + 1} из ${c.latest_sequence === null ? 0 : c.latest_sequence + 1} событий. Повреждённых записей: ${c.malformed_count}; неизвестных событий: ${c.unknown_count}; усечённых выдержек: ${c.truncated_count}.`,
+        ),
+      );
+      if (c.latest_sequence !== null && c.analyzed_sequence < c.latest_sequence)
+        meta.append(
+          el(
+            "p",
+            "Есть новые события, которые ещё не вошли в отчёт.",
+            "warning",
+          ),
+        );
+      if (!c.initial_history_fully_read)
+        meta.append(
+          el(
+            "p",
+            "Исходная история ещё дочитывается; это промежуточный отчёт.",
+            "warning",
+          ),
+        );
+      if (state.analyzing)
+        meta.append(
+          el("p", "● Анализируется новая порция журнала…", "warning"),
+        );
+      for (const err of [state.error, state.export_error])
+        if (err) meta.append(el("p", err, "error"));
+      root.append(meta);
+      const r = state.report;
+      if (!r) {
+        const waiting = card("Готовится первый отчёт");
+        waiting.classList.add("full");
+        waiting.append(
+          el(
+            "p",
+            "Сервис читает историю выбранной сессии. Эта страница обновится автоматически.",
+          ),
+        );
+        root.append(waiting);
+      } else {
+        const summary = card("Задание");
+        summary.classList.add("full");
+        summary.append(el("p", r.goal));
+        summary.append(el("p", r.summary.text));
+        evidence(summary, r.summary.refs, "summary");
+        if (r.scope_changed)
+          summary.append(el("p", "Объём задания изменился", "scope"));
+        root.append(summary, progressCard(r), historyCard());
+        const facts = card("Результаты и следующие шаги");
+        facts.classList.add("full");
+        claims(facts, "Сделано", r.done);
+        claims(facts, "Осталось", r.remaining);
+        claims(
+          facts,
+          "Последняя наблюдаемая работа",
+          r.current_action ? [r.current_action] : [],
+        );
+        claims(facts, "Блокеры", r.blockers);
+        facts.append(el("p", r.uncertainty, "muted"));
+        root.append(facts, tasksCard(r));
+      }
+      app.replaceChildren(root);
+      for (const d of app.querySelectorAll("details"))
+        d.open = opened.has(d.dataset.key);
+      window.scrollTo(0, scroll);
+      freshness();
+    }
+    function freshness() {
+      const n = document.getElementById("freshness");
+      const age = state.last_event_at
+        ? Math.max(
+            0,
+            Math.floor((Date.now() - Date.parse(state.last_event_at)) / 60000),
+          )
+        : null;
+      n.textContent =
+        age === null ? "Нет наблюдений" : `Последнее событие ${age} мин назад`;
+      n.className = "badge" + (age !== null && age >= 10 ? " warning" : "");
+    }
+    render(initial);
+    setInterval(freshness, 30000);
+    if (location.protocol === "http:" || location.protocol === "https:") {
+      const stream = new EventSource("/events");
+      stream.onopen = () => {
+        connection.textContent = "● Подключено";
+        connection.className = "badge good";
+      };
+      stream.onerror = () => {
+        connection.textContent = "○ Связь потеряна · переподключение";
+        connection.className = "badge warning";
+      };
+      stream.onmessage = (e) => {
+        try {
+          render(JSON.parse(e.data));
+        } catch {
+          connection.textContent = "Ошибка обновления";
+          connection.className = "badge error";
+        }
+      };
+    }
+  </script>
+</html>

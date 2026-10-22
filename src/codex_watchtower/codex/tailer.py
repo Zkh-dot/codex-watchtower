@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import itertools
 import json
 import os
 import stat as stat_module
@@ -200,6 +201,7 @@ def read_new_records(
     *,
     sessions_root: Path | None = None,
     expected_uid: int | None = None,
+    max_records: int | None = None,
 ) -> ReadResult:
     """Read every complete newline-terminated record appended since ``cursor``.
 
@@ -229,8 +231,11 @@ def read_new_records(
             hasher.update(chunk)
             remaining_prefix -= len(chunk)
 
+        if remaining_prefix or hasher.hexdigest() != cursor.checkpoint_hash:
+            raise TailerSafetyError("source prefix changed between checkpoint validation and read")
+
         # Read new bytes from the same fd.
-        new_bytes = f.read()
+        new_bytes = f.read() if max_records is None else b"".join(itertools.islice(f, max_records))
 
     lines = new_bytes.split(b"\n")
     complete_lines = lines[:-1]

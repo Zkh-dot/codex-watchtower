@@ -12,6 +12,7 @@ _HANDLERS = {
     "inspect": service.inspect_main,
     "assess": service.assess_main,
     "doctor": service.doctor_main,
+    "report": service.report_main,
 }
 
 

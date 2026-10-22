@@ -595,3 +595,12 @@ def serve_main(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         pass
     return 0
+
+
+# --- selected-session HTML report ------------------------------------------
+
+
+def report_main(args: argparse.Namespace) -> int:
+    from codex_watchtower.report.service import report_main as run_report
+
+    return run_report(args)

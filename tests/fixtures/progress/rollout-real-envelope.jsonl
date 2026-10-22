@@ -1,0 +1,13 @@
+{"type":"session_meta","payload":{"id":"progress-fixture","timestamp":"2026-10-22T08:00:00Z","cwd":"/example/project","cli_version":"0.163.0"}}
+{"timestamp":"2026-10-22T08:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+{"timestamp":"2026-10-22T08:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Добавь отчёт, проверь тесты и опубликуй результат."}]}}
+{"timestamp":"2026-10-22T08:00:03Z","type":"response_item","payload":{"type":"function_call","name":"update_plan","call_id":"plan-1","arguments":"{\"plan\":[{\"step\":\"Добавить отчёт\",\"status\":\"in_progress\"},{\"step\":\"Проверить тесты\",\"status\":\"pending\"}]}"}}
+{"timestamp":"2026-10-22T08:00:04Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"cmd-1","arguments":"{\"cmd\":\"pytest -q\"}"}}
+{"timestamp":"2026-10-22T08:00:05Z","type":"response_item","payload":{"type":"function_call_output","call_id":"cmd-1","output":"Process exited with code 0\n3 passed"}}
+{"timestamp":"2026-10-22T08:00:06Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"cmd-1","command":["pytest","-q"],"status":"completed","aggregated_output":"3 passed","exit_code":0}}}
+{"timestamp":"2026-10-22T08:00:07Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"patch-1","input":"*** Add File: report.py\n+print('report')"}}
+{"timestamp":"2026-10-22T08:00:08Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"patch-1","output":"Success"}}
+{"timestamp":"2026-10-22T08:00:09Z","type":"response_item","payload":{"type":"compaction","encrypted_content":"unavailable"}}
+{"timestamp":"2026-10-22T08:00:10Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Тесты прошли; публикация ещё не выполнена."}}
+{"timestamp":"2026-10-22T08:01:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-2"}}
+{"timestamp":"2026-10-22T08:01:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Публикацию пока исключи из задания."}]}}
