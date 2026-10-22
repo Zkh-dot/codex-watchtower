@@ -11,11 +11,14 @@ import time
 from datetime import UTC, datetime
 
 import httpx
+import pytest
 
 from tests.unit.test_progress_report import FIXTURE, report_for
 
 
-def test_report_command_http_sse_export_and_shutdown(tmp_path):
+@pytest.mark.parametrize("fixed_port", [False, True])
+def test_report_command_http_sse_export_and_shutdown(tmp_path, unused_tcp_port, fixed_port):
+    port = unused_tcp_port if fixed_port else 0
     source = tmp_path / "rollout.jsonl"
     records = [json.loads(line) for line in FIXTURE.read_text().splitlines()]
     records[0]["payload"]["timestamp"] = datetime.now(UTC).isoformat()
@@ -62,6 +65,8 @@ def test_report_command_http_sse_export_and_shutdown(tmp_path):
                 str(source),
                 "--output",
                 str(output),
+                "--port",
+                str(port),
             ],
             stdout=stdout,
             stderr=stderr,
@@ -86,6 +91,8 @@ def test_report_command_http_sse_export_and_shutdown(tmp_path):
                 assert process.poll() is None
                 time.sleep(0.05)
             assert url and url.startswith("http://127.0.0.1:")
+            if fixed_port:
+                assert url == f"http://127.0.0.1:{port}/"
             with httpx.Client(base_url=url, timeout=15, trust_env=False) as client:
                 deadline = time.monotonic() + 15
                 snapshot = client.get("/report.json").json()

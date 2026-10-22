@@ -177,5 +177,8 @@ Without one, the report command uses `~/.codex/sessions` and
 separately from `serve`, and contain redacted evidence excerpts and report history.
 The source session and workspace are never changed.
 
+`--port PORT` pins the loopback port for a reverse proxy; the default `0` selects
+a free port. See operations for nginx deployment under `/codex-watchtower/`.
+
 See [the product specification](docs/specs/2026-10-22-session-progress-report.md)
 and [operations](docs/operations.md#session-progress-reports) for recovery and checks.

@@ -133,10 +133,13 @@ assert(visibleText(app).includes('60–74%')); // resumed goals regain their cur
  elements['session-search'].value='mtg заголовок';
  elements['session-form'].handlers.submit({preventDefault(){}});
  await new Promise(setImmediate);
- assert.equal(calls[0][0],'/sessions?q='+encodeURIComponent('mtg заголовок'));
+ assert.equal(calls[0][0],'sessions?q='+encodeURIComponent('mtg заголовок'));
+ assert.equal(new URL(calls[0][0], 'http://127.0.0.1/codex-watchtower/').pathname,
+              '/codex-watchtower/sessions');
  const button=elements['session-results'].children[0];
  assert.equal(button.children[0].textContent,'<script>untrusted</script>');
  await button.handlers.click();
+ assert.equal(calls[1][0],'session');
  assert.equal(JSON.parse(calls[1][1].body).key,'a'.repeat(24));
  assert.equal(state.session_id,'another-session');assert.equal(lastVersion,0);
  assert.equal(elements['session-results'].hidden,true);assert.equal(scrolls.at(-1),0);

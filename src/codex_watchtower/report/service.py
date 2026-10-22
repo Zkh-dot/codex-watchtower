@@ -45,9 +45,11 @@ def select_source(args: argparse.Namespace, root: Path) -> Path:
     return sessions[index].path.absolute()
 
 
-async def serve_report(engine: ReportEngine, workspace: ReportWorkspace | None = None) -> None:
+async def serve_report(
+    engine: ReportEngine, workspace: ReportWorkspace | None = None, *, port: int = 0
+) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
+        sock.bind(("127.0.0.1", port))
         sock.listen(128)
         server = uvicorn.Server(
             uvicorn.Config(
@@ -92,6 +94,8 @@ def report_main(args: argparse.Namespace) -> int:
     try:
         if not 300 <= args.interval <= 600:
             raise ValueError("--interval must be between 300 and 600 seconds")
+        if not 0 <= args.port <= 65535:
+            raise ValueError("--port must be between 0 and 65535")
         source = select_source(args, config.sessions_root)
         workspace = ReportWorkspace(
             source,
@@ -104,7 +108,7 @@ def report_main(args: argparse.Namespace) -> int:
         )
         try:
             workspace.engine.export()
-            asyncio.run(serve_report(workspace.engine, workspace))
+            asyncio.run(serve_report(workspace.engine, workspace, port=args.port))
         finally:
             workspace.close()
     except KeyboardInterrupt:

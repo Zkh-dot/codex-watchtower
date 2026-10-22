@@ -138,11 +138,20 @@ number; noninteractive execution requires a source. The report command can run
 without a config file. If supplied, `--config` uses the standard Watchtower TOML.
 `--interval` accepts 300–600 seconds; `--model` defaults to `gpt-6-luna`.
 
-The server binds only to `127.0.0.1:0`, keeps that socket, and prints the actual URL
+By default the server binds to `127.0.0.1:0`, keeps that socket, and prints the actual URL
 after startup. It serves `/`, `/report.json`, and `/events`, not the rollout or a
 file directory. Reconnecting SSE clients receive the current full snapshot.
 `report.html` is atomically replaced with mode 0600. Open it as a file for an offline
 snapshot; it performs no network requests under `file://`.
+
+For a permanent local nginx URL, run the report with `--port 18765` and include
+`deploy/codex-watchtower-report.nginx.conf` inside nginx's `http` block. This serves
+`http://127.0.0.1/codex-watchtower/`; the URL without a trailing slash redirects to
+it. Client API and SSE URLs are relative to the page. nginx strips the prefix and
+disables buffering for streaming updates. The backend remains bound to loopback.
+Validate with `nginx -t` before reloading. Run the report under systemd with
+`Restart=on-failure`, enable it for boot, and keep config, HTML and state outside
+`/tmp`. Supply the user's HOME and a PATH containing both Codex CLI and Node.
 
 The live header searches `/sessions?q=...` by folder, ID and title, with a 15-second
 catalog cache and at most 20 results. Only sessions started within the last seven

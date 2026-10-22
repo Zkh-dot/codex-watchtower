@@ -31,6 +31,9 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--interval", type=int, default=300, help="300–600 seconds")
     report_parser.add_argument("--output", default="report.html", help="standalone HTML path")
     report_parser.add_argument("--model", default="gpt-6-luna", help="Codex model identifier")
+    report_parser.add_argument(
+        "--port", type=int, default=0, help="loopback port; 0 selects a free port"
+    )
 
     run_parser = subparsers.add_parser(
         "run", help="wrap a Codex invocation and capture process exit evidence"

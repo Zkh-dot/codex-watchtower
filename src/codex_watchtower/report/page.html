@@ -855,7 +855,7 @@
     setInterval(freshness, 30000);
     if (location.protocol === "http:" || location.protocol === "https:") {
       if (initial.session_picker) setupSessionPicker();
-      const stream = new EventSource("/events");
+      const stream = new EventSource("events");
       stream.onopen = () => {
         connection.textContent = "● Подключено";
         connection.className = "badge good";
@@ -889,7 +889,7 @@
         status.textContent = "Поиск…";
         try {
           const response = await fetch(
-            "/sessions?q=" + encodeURIComponent(input.value),
+            "sessions?q=" + encodeURIComponent(input.value),
           );
           if (!response.ok) throw new Error();
           const rows = await response.json();
@@ -920,7 +920,7 @@
               clearTimeout(timer);
               status.textContent = "Переключение сессии…";
               try {
-                const response = await fetch("/session", {
+                const response = await fetch("session", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ key: row.key }),
