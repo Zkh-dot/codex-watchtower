@@ -95,15 +95,24 @@ assert.equal(connection.textContent,undefined); // offline snapshots do not init
 const completed=JSON.parse(JSON.stringify(update));completed.version=3;
 completed.reported_goal={status:'complete',at:'2026-10-22T08:05:00Z'};
 completed.report_is_current=false;completed.coverage.latest_sequence=50000;
+completed.report.progress={low:60,high:74};
 completed.report.tasks[0].status='in_progress';render(completed);
 assert(visibleText(app).includes('✓ Цель завершена'));
 assert(visibleText(app).includes('Архивный срез'));
 assert(visibleText(app).includes('Задачи архивного среза'));
 assert(!visibleText(app).includes('▶ В работе')); // old tasks cannot masquerade as live work
 assert(!visibleText(app).includes(initial.report.current_action.text));
+function allText(n){return (n.textContent||'')+n.children.map(allText).join(' ');}
+assert(!allText(app).includes('60–74%')); // no obsolete headline percentage, even under a cut
+assert(!allText(app).includes('ETA'));
+const history=app.querySelectorAll('details').find(d=>d.dataset.key==='completed-history');
+assert(history && history.children[0].textContent.includes(time(completed.report_through_at)));
 completed.version=4;completed.report_is_current=true;render(completed);
 assert(visibleText(app).includes('Последняя оценка задач'));
 assert(!visibleText(app).includes('▶ В работе'));
+assert(!allText(app).includes('60–74%')); // applies even after analysis catches up
+completed.version=5;completed.reported_goal.status='active';render(completed);
+assert(visibleText(app).includes('60–74%')); // resumed goals regain their current estimate
 """
     subprocess.run(
         ["node", "-"],

@@ -90,6 +90,9 @@ Regression tests cover these boundaries, oversized tool results, restart and the
 absence of old in-progress tasks in the visible completed-goal view. The real
 journal snapshot returned a completed goal while its model report still covered
 older events. Browser tools remain unattached, so visual acceptance is pending.
+Completed goals omit percentage and ETA cards, including under archive disclosures;
+only a dated, collapsed estimate history remains. The DOM regression covers an old
+60–74% estimate, caught-up completion and a subsequent return to active status.
 
 An additional HTTP lifecycle regression holds SSE open during SIGINT. The server
 now bounds graceful shutdown so an attached browser cannot delay restart forever.

@@ -677,17 +677,34 @@
         evidence(overview, r.summary.refs, "summary");
         summary.append(overview);
         root.append(summary);
-        const assessment = el("div", undefined, "grid full");
-        assessment.append(progressCard(r), historyCard());
-        if (!current) {
-          const archive = cut(
-            "Оценки по архивному срезу",
-            "archive-assessment",
+        if (closed) {
+          const history = cut(
+            "История оценок · события до " + time(state.report_through_at),
+            "completed-history",
           );
-          archive.className = "card full";
-          archive.append(assessment);
-          root.append(archive);
-        } else root.append(assessment);
+          history.className = "card full";
+          history.append(
+            el(
+              "p",
+              "Цель завершена. Прежние оценки отражают прошлые этапы, а не итог работы.",
+              "muted",
+            ),
+            historyCard(),
+          );
+          root.append(history);
+        } else {
+          const assessment = el("div", undefined, "grid full");
+          assessment.append(progressCard(r), historyCard());
+          if (!current) {
+            const archive = cut(
+              "Оценки по архивному срезу",
+              "archive-assessment",
+            );
+            archive.className = "card full";
+            archive.append(assessment);
+            root.append(archive);
+          } else root.append(assessment);
+        }
         const tasks = tasksCard(r);
         if (!current || closed) {
           const archive = cut(

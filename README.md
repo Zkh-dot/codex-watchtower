@@ -146,6 +146,8 @@ The compact view uses expandable task rows, summaries and evidence. A structured
 Codex goal status is shown separately from the model assessment. While analysis
 lags behind the ingested journal, old estimates and tasks are collapsed and marked
 as historical; they are not presented as current work or changed to 100% completion.
+For a completed goal, the percentage and ETA cards are removed entirely. Prior
+estimates remain only in a collapsed history labelled with the covered event date.
 
 The first analysis starts immediately. Initial history is folded in bounded batches;
 a partial report shows its coverage. After initial catch-up, analysis runs every
