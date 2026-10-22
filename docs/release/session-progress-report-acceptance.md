@@ -52,8 +52,28 @@ becoming evidence of completion.
 Closing and reopening the database, then reading the source again, preserved
 the coverage counts without duplicates. HTML export succeeded. The report version
 remained zero with no model assessment, as expected. This verifies local ingestion,
-checkpoint recovery and export on a large real journal; model quality, HTTP/SSE
-behavior on that journal and visual acceptance remain unverified.
+checkpoint recovery and export on a large real journal. This ingestion-only check
+does not establish model quality, HTTP/SSE behavior or visual acceptance.
+
+## Authorized real-model pilot (in progress)
+
+After explicit approval of the journal and Codex-provider destination, the
+installed `gpt-6-luna` adapter produced seven successive reports without an
+analysis error. The seventh covered events through sequence 141 of 50,188;
+this is an initial-history catch-up, not a current full-session assessment.
+The inspected report cited matching evidence, kept progress and ETA unknown,
+and explicitly described its incomplete historical coverage. Successful report
+intervals observed early in the run were roughly 13–22 seconds, including
+scheduling overhead; model token usage and monetary cost were not measured.
+
+A real HTTP/SSE check observed versions 6 and 7 on one connection, received
+version 7 after reconnecting with `Last-Event-ID`, and found version 7 in both
+the served page and saved HTML. No browser is attached to the available UI
+tool: opening either the in-app browser or Chrome failed as unavailable.
+Visual acceptance therefore remains pending, despite browser authorization.
+
+The upstream merge attempt returned a GitHub permissions error for the current
+account. The user will complete merge in the UI if that access remains unavailable.
 
 ## Pending acceptance
 
