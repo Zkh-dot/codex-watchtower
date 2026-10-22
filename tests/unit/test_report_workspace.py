@@ -29,7 +29,13 @@ def workspace(tmp_path):
         records = [
             {
                 "type": "session_meta",
-                "payload": {"id": name, "cwd": cwd, "timestamp": datetime.now(UTC).isoformat()},
+                "payload": {
+                    "id": name,
+                    "cwd": cwd,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "source": "cli",
+                    "thread_source": "user",
+                },
             },
             {
                 "type": "response_item",
@@ -50,6 +56,28 @@ def workspace(tmp_path):
     )
     yield observer
     observer.close()
+
+
+@pytest.mark.asyncio
+async def test_search_only_lists_user_sessions_before_applying_result_limit(workspace):
+    original = [json.loads(line) for line in workspace.initial_source.read_text().splitlines()]
+    for i in range(25):
+        records = json.loads(json.dumps(original))
+        records[0]["payload"].update(
+            id=f"guardian-{i}",
+            source={"subagent": {"other": "guardian"}},
+            thread_source="guardian_review",
+            parent_thread_id="a",
+        )
+        (workspace.initial_source.parent / f"rollout-guardian-{i}.jsonl").write_text(
+            "".join(json.dumps(record) + "\n" for record in records)
+        )
+    assert [row["session_id"] for row in await workspace.search("mtg")] == ["a"]
+    assert await workspace.search("guardian") == []
+    original[0]["payload"]["thread_source"] = "guardian_review"
+    workspace.initial_source.write_text("".join(json.dumps(record) + "\n" for record in original))
+    workspace.catalog_at = 0
+    assert await workspace.search("mtg") == []
 
 
 @pytest.mark.asyncio

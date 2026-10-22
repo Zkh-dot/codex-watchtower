@@ -3,7 +3,30 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from codex_watchtower.codex.discovery import discover_sessions
+import pytest
+
+from codex_watchtower.codex.discovery import discover_sessions, is_user_session
+
+
+@pytest.mark.parametrize(
+    ("meta", "expected"),
+    [
+        ({"source": "cli", "thread_source": "user"}, True),
+        ({"source": "vscode", "thread_source": "user"}, True),
+        ({"source": "exec", "thread_source": "user"}, True),
+        ({"source": "vscode", "thread_source": "realtime_voice"}, True),
+        ({"source": "cli"}, True),
+        ({"source": "cli", "thread_source": "guardian_review"}, False),
+        ({"source": "cli", "thread_source": "subagent"}, False),
+        ({"source": "cli", "parent_thread_id": "parent"}, False),
+        ({"source": {"subagent": {"other": "guardian"}}}, False),
+        ({"source": {"subagent": {"thread_spawn": {"parent_thread_id": "p"}}}}, False),
+        ({"source": "mcp"}, False),
+        ({}, False),
+    ],
+)
+def test_user_session_uses_metadata_not_title(meta, expected):
+    assert is_user_session({**meta, "title": "Guardian review"}) is expected
 
 
 def _write(path: Path, lines: list[dict[str, object]]) -> None:

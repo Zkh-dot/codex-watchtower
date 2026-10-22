@@ -19,6 +19,7 @@ def test_report_command_http_sse_export_and_shutdown(tmp_path):
     source = tmp_path / "rollout.jsonl"
     records = [json.loads(line) for line in FIXTURE.read_text().splitlines()]
     records[0]["payload"]["timestamp"] = datetime.now(UTC).isoformat()
+    records[0]["payload"].update(source="cli", thread_source="user")
     source.write_text("".join(json.dumps(record) + "\n" for record in records))
     folder = tmp_path / "2026/10/22"
     folder.mkdir(parents=True)

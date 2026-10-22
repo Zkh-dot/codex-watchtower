@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from codex_watchtower.codex.discovery import discover_sessions, read_session_meta
+from codex_watchtower.codex.discovery import discover_sessions, is_user_session, read_session_meta
 from codex_watchtower.privacy.redact import redact_text
 from codex_watchtower.report.engine import ReportEngine
 from codex_watchtower.storage.db import open_database
@@ -128,18 +128,19 @@ class ReportWorkspace:
         rows = [
             (s.path.absolute(), s.session_id, s.workspace or "", s.started_at or "")
             for s in sessions
-            if s.metadata_complete
+            if s.metadata_complete and s.user_session
         ]
         if not any(row[0] == self.initial_source for row in rows):
             meta = read_session_meta(self.initial_source)
-            rows.append(
-                (
-                    self.initial_source,
-                    str(meta.get("id", "")),
-                    str(meta.get("cwd", "")),
-                    str(meta.get("timestamp", "")),
+            if is_user_session(meta):
+                rows.append(
+                    (
+                        self.initial_source,
+                        str(meta.get("id", "")),
+                        str(meta.get("cwd", "")),
+                        str(meta.get("timestamp", "")),
+                    )
                 )
-            )
         result = {}
         for path, session_id, workspace, started_at in rows:
             if not recent_session(started_at):

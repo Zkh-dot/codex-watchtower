@@ -146,7 +146,9 @@ snapshot; it performs no network requests under `file://`.
 
 The live header searches `/sessions?q=...` by folder, ID and title, with a 15-second
 catalog cache and at most 20 results. Only sessions started within the last seven
-days appear; modifying an old journal does not make it recent. Codex's local thread
+days appear; modifying an old journal does not make it recent. Only root user
+sessions from CLI, VS Code or exec are listed; Guardian, subagent and service
+sessions are excluded using source, thread source and parent metadata. Codex's local thread
 index supplies renamed titles, with the first user message as fallback. The picker
 is hidden in offline files. `POST /session` accepts only an opaque catalog key;
 arbitrary paths and foreign origins are rejected. Selection cancels the previous

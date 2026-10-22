@@ -27,6 +27,16 @@ class DiscoveredSession:
     source: str | None
     cli_version: str | None
     metadata_complete: bool
+    user_session: bool = False
+
+
+def is_user_session(meta: dict[str, Any]) -> bool:
+    return (
+        not meta.get("parent_thread_id")
+        and isinstance(meta.get("source"), str)
+        and meta["source"] in {"cli", "vscode", "exec"}
+        and meta.get("thread_source") in (None, "user", "realtime_voice")
+    )
 
 
 def discover_sessions(sessions_root: Path) -> list[DiscoveredSession]:
@@ -95,4 +105,5 @@ def _inspect(path: Path) -> DiscoveredSession:
         source=meta.get("source") if isinstance(meta.get("source"), str) else None,
         cli_version=meta.get("cli_version") if isinstance(meta.get("cli_version"), str) else None,
         metadata_complete=complete,
+        user_session=is_user_session(meta),
     )

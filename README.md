@@ -150,7 +150,8 @@ For a completed goal, the percentage and ETA cards are removed entirely. Prior
 estimates remain only in a collapsed history labelled with the covered event date.
 
 The page header searches local sessions by folder, full or partial ID, and title.
-Results include only sessions started in the last seven days, up to 20 matches.
+Results include only user sessions started in the last seven days, up to 20 matches.
+Guardian reviews and other subagent or service sessions are excluded by metadata.
 Selecting one switches the report in all connected tabs without reloading. Each
 session keeps its own checkpoint and report; only the selected session is analyzed.
 An already open report remains available after its session ages out of search.
