@@ -43,7 +43,7 @@ def output_schema(packet: str) -> dict[str, object]:
     return schema
 
 
-def build_command(workdir: Path, model: str) -> list[str]:
+def build_command(workdir: Path, model: str, *, fast: bool = False) -> list[str]:
     command = [
         "codex",
         "exec",
@@ -75,10 +75,14 @@ def build_command(workdir: Path, model: str) -> list[str]:
         "features.enable_request_compression=false",
     ):
         command.extend(["-c", setting])
+    if fast:
+        command.extend(["-c", 'service_tier="fast"'])
     return command + ["-"]
 
 
-async def run_codex(packet: str, model: str, *, timeout: float = 180) -> ProgressReport:
+async def run_codex(
+    packet: str, model: str, *, timeout: float = 60, fast: bool = False
+) -> ProgressReport:
     version = await asyncio.create_subprocess_exec(
         "codex", "--version", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
     )
@@ -105,7 +109,7 @@ async def run_codex(packet: str, model: str, *, timeout: float = 180) -> Progres
             (workdir / "stderr.log").open("wb") as stderr,
         ):
             process = await asyncio.create_subprocess_exec(
-                *build_command(workdir, model),
+                *build_command(workdir, model, fast=fast),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=stdout,
                 stderr=stderr,

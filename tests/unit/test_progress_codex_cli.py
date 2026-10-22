@@ -77,3 +77,10 @@ async def test_invalid_model_json_and_raw_error_not_exposed(tmp_path, monkeypatc
     with pytest.raises(RuntimeError) as exc:
         await run_codex(PACKET, "gpt-6-luna")
     assert "sensitive" not in str(exc.value)
+
+
+def test_fast_is_the_actual_service_tier(tmp_path):
+    from codex_watchtower.models.codex_cli import build_command
+
+    assert 'service_tier="fast"' in build_command(tmp_path, "gpt-6-luna", fast=True)
+    assert not any("service_tier" in item for item in build_command(tmp_path, "gpt-6-luna"))

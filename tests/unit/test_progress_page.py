@@ -76,7 +76,8 @@ const elements={app:new Element('main'),connection:new Element('span'),
 elements['initial-data'].textContent=JSON.stringify(SNAPSHOT);
 for(const id of ['session-picker','session-form','session-search',
                  'session-results','session-search-status',
-                 'session-heading','session-id','session-workspace'])
+                 'session-heading','session-id','session-workspace',
+                 'report-controls','fast-mode','report-settings-status'])
   elements[id]=new Element('div');
 global.document={getElementById:k=>elements[k],createElement:t=>new Element(t),
  createElementNS:(_,t)=>new Element(t)};
@@ -178,6 +179,23 @@ assert(visibleText(app).includes('60–74%')); // resumed goals regain their cur
  render(remote); // a selection arriving from another tab updates the visible search markers
  assert.equal(button['aria-current'],'false');
  assert.equal(previousButton['aria-current'],'true');
+ setupReportSettings();
+ assert.equal(elements['report-controls'].hidden,false);
+ global.fetch=async(url,options)=>{
+   assert.equal(url,'settings');assert.equal(JSON.parse(options.body).fast,true);
+   return {ok:true,json:async()=>({...remote,fast:true})};
+ };
+ elements['fast-mode'].checked=true;
+ await elements['fast-mode'].handlers.change();
+ assert.equal(state.fast,true);assert.equal(elements['fast-mode'].checked,true);
+ const live={...remote,version:2,report_mode:'recent',report_is_current:true,
+   recent_events:[{timestamp:'2026-10-22T09:06:00Z',kind:'message',
+     summary:'Проверяю актуальную работу'}]};
+ render(live);assert(visibleText(app).includes(live.report.summary.text));
+ assert(visibleText(app).includes('План работы'));
+ const old={...live,version:3,report_mode:'history',report_is_current:false};
+ render(old);assert(visibleText(app).includes('Проверяю актуальную работу'));
+ assert(!visibleText(app).includes(old.report.goal));
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
     subprocess.run(

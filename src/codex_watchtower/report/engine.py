@@ -7,7 +7,7 @@ import json
 import os
 import time
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,8 @@ from codex_watchtower.storage.repository import Repository
 
 PACKET_BUDGET = 48_000
 MAX_REPORT_CHARACTERS = 24_000
+LIVE_TIMEOUT = 60
+WINDOW_MINUTES = 5
 Assessor = Callable[[str, str], Awaitable[ProgressReport]]
 
 
@@ -39,6 +41,7 @@ class ReportEngine:
         interval: int = 300,
         model: str = "gpt-6-luna",
         assessor: Assessor = run_codex,
+        fast: bool = False,
     ) -> None:
         if not 300 <= interval <= 600:
             raise ValueError("interval must be between 300 and 600 seconds")
@@ -56,6 +59,8 @@ class ReportEngine:
         self.interval = interval
         self.model = model
         self.assessor = assessor
+        self.fast = fast
+        self.analysis_mode: str | None = None
         meta = read_session_meta(self.source)
         session_id = meta.get("id")
         if not isinstance(session_id, str) or not session_id:
@@ -75,7 +80,7 @@ class ReportEngine:
         self.source_error: str | None = None
         self.bootstrap_target: int | None = None
 
-    def ingest(self) -> None:
+    def ingest(self) -> bool:
         cursor = resolve_start(self.source, self.repo.get_cursor(self.session_id))
         if isinstance(cursor, IdentityBroken):
             raise ValueError("Source changed before its checkpoint; restore its verified prefix")
@@ -84,7 +89,7 @@ class ReportEngine:
             cursor,
             sessions_root=self.source.parent,
             expected_uid=os.getuid(),
-            max_records=200,
+            max_records=2000,
         )
         with self.repo.transaction():
             for record in result.records:
@@ -121,25 +126,66 @@ class ReportEngine:
         state = self.repo.get_progress_source(self.session_id)
         assert state is not None
         self.bootstrap_target = state["bootstrap_target"]
+        return result.cursor.byte_offset > cursor.byte_offset
 
-    def packet(self) -> tuple[str, int, ProgressReport | None]:
-        latest = self.repo.latest_progress(self.session_id)
+    def packet(self, *, live: bool = False) -> tuple[str, int, ProgressReport | None]:
+        latest = self.repo.latest_progress(self.session_id, live=live)
+        if live and latest is None:
+            latest = self.repo.latest_progress(self.session_id)
         previous = ProgressReport.model_validate_json(latest["body"]) if latest else None
         after = latest["event_cursor"] if latest else -1
         rows = self.repo.progress_events(self.session_id, after)
+        window_start = None
+        available = len(rows)
+        if live:
+            last = self.repo.connection.execute(
+                "SELECT timestamp FROM normalized_events WHERE session_id=? "
+                "ORDER BY event_sequence DESC LIMIT 1",
+                (self.session_id,),
+            ).fetchone()
+            if last is None:
+                raise ValueError("no events available")
+            end = datetime.fromisoformat(last["timestamp"].replace("Z", "+00:00"))
+            window_start = (end - timedelta(minutes=WINDOW_MINUTES)).isoformat()
+            rows = list(
+                self.repo.connection.execute(
+                    "SELECT * FROM normalized_events WHERE session_id=? "
+                    "AND julianday(timestamp)>=julianday(?) ORDER BY event_sequence DESC",
+                    (self.session_id, window_start),
+                )
+            )
+            available = len(rows)
         evidence = self.repo.progress_evidence(
             self.session_id, previous.references() if previous else set()
         )
+        if live:
+            # Keep the current request available even if it predates the five-minute window.
+            anchor = self.repo.connection.execute(
+                "SELECT * FROM normalized_events WHERE session_id=? AND kind='message' "
+                "AND source_type='user' ORDER BY event_sequence DESC LIMIT 1",
+                (self.session_id,),
+            ).fetchone()
+            if anchor and anchor["logical_event_id"] not in {
+                r["logical_event_id"] for r in evidence
+            }:
+                evidence.append(anchor)
         source_state = self.repo.get_progress_source(self.session_id)
         assert source_state is not None
         packet: dict[str, Any] = {
             "session_id": self.session_id,
             "previous_report": previous.model_dump() if previous else None,
             "previous_evidence": [
-                {"id": row["logical_event_id"], "summary": row["summary"][:160]} for row in evidence
+                {"id": row["logical_event_id"], "summary": row["summary"][: 1200 if live else 160]}
+                for row in evidence
             ],
             "events": [],
             "coverage": {
+                "mode": "recent" if live else "history",
+                "window_minutes": WINDOW_MINUTES if live else None,
+                "window_start": window_start,
+                "available_events": available,
+                "included_events": 0,
+                "omitted_events": available,
                 "after_sequence": after,
                 "through_sequence": after,
                 "latest_sequence": self.repo.max_event_sequence(self.session_id),
@@ -153,7 +199,17 @@ class ReportEngine:
             return json.dumps(packet, ensure_ascii=False, separators=(",", ":"))
 
         if len(encode()) > PACKET_BUDGET - 5000:
-            packet["previous_evidence"] = [{"id": r["logical_event_id"]} for r in evidence]
+            packet["previous_evidence"] = [
+                {
+                    "id": r["logical_event_id"],
+                    **(
+                        {"summary": r["summary"][:1200]}
+                        if live and r["source_type"] == "user"
+                        else {}
+                    ),
+                }
+                for r in evidence
+            ]
         for row in rows:
             event = {
                 "id": row["logical_event_id"],
@@ -161,22 +217,44 @@ class ReportEngine:
                 "timestamp": row["timestamp"],
                 "kind": row["kind"],
                 "source_type": row["source_type"],
-                "summary": row["summary"],
+                "summary": row["summary"][:1200] if live else row["summary"],
                 "exit_code": row["exit_code"],
             }
             packet["events"].append(event)
+            packet["coverage"]["included_events"] = len(packet["events"])
+            packet["coverage"]["omitted_events"] = available - len(packet["events"])
             packet["coverage"]["through_sequence"] = row["event_sequence"]
             if len(encode()) > PACKET_BUDGET:
                 packet["events"].pop()
                 break
         if not packet["events"]:
             raise ValueError("no new event fits the context budget")
+        if live:
+            packet["events"].reverse()
         cursor = packet["events"][-1]["sequence"]
+        packet["coverage"]["included_events"] = len(packet["events"])
+        packet["coverage"]["omitted_events"] = available - len(packet["events"])
         packet["coverage"]["through_sequence"] = cursor
         return encode(), cursor, previous
 
+    def live_due(self, now: float) -> bool:
+        if self.analyzing or self.source_error or self.bootstrap_target is None:
+            return False
+        latest = self.repo.latest_progress(self.session_id, live=True)
+        maximum = self.repo.max_event_sequence(self.session_id)
+        state = self.repo.get_progress_source(self.session_id)
+        assert state is not None
+        return bool(
+            maximum is not None
+            and (latest is None or latest["event_cursor"] < maximum)
+            and (
+                (latest is None and not state["live_error"])
+                or now >= state["live_attempt_at"] + self.interval
+            )
+        )
+
     def due(self, now: float) -> bool:
-        if self.analyzing or self.source_error:
+        if self.analyzing or self.source_error or self.bootstrap_target is None:
             return False
         latest = self.repo.latest_progress(self.session_id)
         maximum = self.repo.max_event_sequence(self.session_id)
@@ -185,21 +263,32 @@ class ReportEngine:
             return False
         state = self.repo.get_progress_source(self.session_id)
         assert state is not None
-        # Initial history is folded in bounded batches; errors still wait a full interval.
-        bootstrapping = self.bootstrap_target is None or after < self.bootstrap_target
-        return bool(
-            (bootstrapping and not state["error"])
-            or now >= state["last_attempt_at"] + self.interval
-        )
+        if after >= self.bootstrap_target:
+            return False
+        # Initial history is folded once; subsequent work uses the recent window.
+        return not state["error"] or now >= state["last_attempt_at"] + self.interval
 
-    async def assess(self) -> None:
+    async def assess(self, *, live: bool = False) -> None:
         if self.analyzing:
             return
         self.analyzing = True
-        self.repo.update_progress_source(self.session_id, last_attempt_at=time.time(), error=None)
+        self.analysis_mode = "recent" if live else "history"
+        if live:
+            self.repo.connection.execute(
+                "UPDATE progress_sources SET live_attempt_at=?,live_error=NULL WHERE session_id=?",
+                (time.time(), self.session_id),
+            )
+        else:
+            self.repo.update_progress_source(
+                self.session_id, last_attempt_at=time.time(), error=None
+            )
         try:
-            packet, cursor, previous = self.packet()
-            report = await self.assessor(packet, self.model)
+            async with asyncio.timeout(LIVE_TIMEOUT):
+                packet, cursor, previous = self.packet(live=live)
+                if self.assessor is run_codex:
+                    report = await run_codex(packet, self.model, fast=self.fast)
+                else:
+                    report = await self.assessor(packet, self.model)
             refs = {event["id"] for event in json.loads(packet)["events"]}
             refs.update(event["id"] for event in json.loads(packet)["previous_evidence"])
             validate_evidence(report, refs, previous)
@@ -218,7 +307,20 @@ class ReportEngine:
                 ensure_ascii=False,
             )
             ProgressReport.model_validate_json(body)
-            self.repo.save_progress(self.session_id, cursor, now_iso(), body)
+            if live:
+                self.repo.connection.execute(
+                    "INSERT OR REPLACE INTO progress_live_reports "
+                    "(session_id,event_cursor,assessed_at,body,coverage) VALUES (?,?,?,?,?)",
+                    (
+                        self.session_id,
+                        cursor,
+                        now_iso(),
+                        body,
+                        json.dumps(json.loads(packet)["coverage"]),
+                    ),
+                )
+            else:
+                self.repo.save_progress(self.session_id, cursor, now_iso(), body)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -229,17 +331,27 @@ class ReportEngine:
                 "FileNotFoundError": "Codex CLI не найден в PATH",
                 "RuntimeError": "Вызов модели через Codex CLI не выполнен",
             }.get(type(exc).__name__, "Не удалось выполнить анализ")
-            self.repo.update_progress_source(
-                self.session_id,
-                last_attempt_at=time.time(),
-                error=f"{reason}. Последний успешный отчёт сохранён.",
-            )
+            error = f"{reason}. Последний успешный отчёт сохранён."
+            if live:
+                self.repo.connection.execute(
+                    "UPDATE progress_sources SET live_attempt_at=?,live_error=? WHERE session_id=?",
+                    (time.time(), error, self.session_id),
+                )
+            else:
+                self.repo.update_progress_source(
+                    self.session_id,
+                    last_attempt_at=time.time(),
+                    error=error,
+                )
         finally:
             self.analyzing = False
+            self.analysis_mode = None
             self.export()
 
     def snapshot(self) -> dict[str, Any]:
-        latest = self.repo.latest_progress(self.session_id)
+        archive = self.repo.latest_progress(self.session_id)
+        live = self.repo.latest_progress(self.session_id, live=True)
+        latest = live if live is not None else archive
         maximum = self.repo.max_event_sequence(self.session_id)
         state = self.repo.get_progress_source(self.session_id)
         assert state is not None
@@ -316,8 +428,23 @@ class ReportEngine:
             "SELECT timestamp FROM normalized_events WHERE session_id=? AND event_sequence=?",
             (self.session_id, latest["event_cursor"] if latest else -1),
         ).fetchone()
+        attempt_at = state["live_attempt_at"] or state["last_attempt_at"]
         return {
-            "version": latest["version"] if latest else 0,
+            "version": (archive["version"] if archive else 0) + (live["version"] if live else 0),
+            "fast": self.fast,
+            "window_minutes": WINDOW_MINUTES,
+            "report_mode": "recent" if live else "history",
+            "analysis_mode": self.analysis_mode,
+            "window_coverage": json.loads(live["coverage"]) if live else None,
+            "recent_events": [
+                {"timestamp": r["timestamp"], "kind": r["kind"], "summary": r["summary"][:400]}
+                for r in self.repo.connection.execute(
+                    "SELECT timestamp,kind,summary FROM normalized_events WHERE session_id=? "
+                    "AND kind='message' AND source_type IN ('assistant','user') "
+                    "GROUP BY summary ORDER BY MAX(event_sequence) DESC LIMIT 3",
+                    (self.session_id,),
+                )
+            ],
             "session_id": self.session_id,
             "session_title": self.session_title,
             "session_workspace": self.session_workspace,
@@ -333,7 +460,15 @@ class ReportEngine:
             "report_through_at": analyzed["timestamp"] if analyzed else None,
             "report_is_current": bool(
                 latest
-                and latest["event_cursor"] == maximum
+                and (
+                    latest["event_cursor"] == maximum
+                    or (
+                        live is not None
+                        and time.time() - datetime.fromisoformat(live["assessed_at"]).timestamp()
+                        <= self.interval + LIVE_TIMEOUT
+                        and (not turn_start or live["event_cursor"] >= turn_start["event_sequence"])
+                    )
+                )
                 and state["bootstrap_target"] is not None
                 and not self.source_error
             ),
@@ -348,24 +483,32 @@ class ReportEngine:
             ),
             "process_state": "unverified",
             "next_check_at": (
-                datetime.fromtimestamp(state["last_attempt_at"] + self.interval, UTC)
+                datetime.fromtimestamp(attempt_at + self.interval, UTC)
                 .replace(microsecond=0)
                 .isoformat()
-                if state["last_attempt_at"]
+                if attempt_at
                 and maximum is not None
                 and (not latest or maximum > latest["event_cursor"])
                 else None
             ),
             "analyzing": self.analyzing,
-            "error": self.source_error or state["error"],
+            "error": self.source_error
+            or state["live_error"]
+            or (state["error"] if not live else None),
             "export_error": self.export_error,
             "coverage": {
-                "analyzed_sequence": latest["event_cursor"] if latest else -1,
+                "analyzed_sequence": archive["event_cursor"] if archive else -1,
                 "latest_sequence": maximum,
                 "malformed_count": state["malformed_count"],
                 "unknown_count": counts["unknown_count"] or 0,
                 "truncated_count": counts["truncated_count"] or 0,
                 "initial_history_fully_read": state["bootstrap_target"] is not None,
+                "history_target": state["bootstrap_target"],
+                "history_complete": bool(
+                    archive
+                    and state["bootstrap_target"] is not None
+                    and archive["event_cursor"] >= state["bootstrap_target"]
+                ),
             },
             "evidence": [
                 {
@@ -383,7 +526,14 @@ class ReportEngine:
                     "progress": json.loads(r["body"])["progress"],
                     "scope_changed": json.loads(r["body"])["scope_changed"],
                 }
-                for r in self.repo.progress_history(self.session_id)
+                for r in (
+                    self.repo.connection.execute(
+                        "SELECT * FROM progress_live_reports WHERE session_id=? ORDER BY version",
+                        (self.session_id,),
+                    )
+                    if live
+                    else self.repo.progress_history(self.session_id)
+                )
             ],
         }
 
@@ -400,18 +550,24 @@ class ReportEngine:
         task: asyncio.Task[None] | None = None
         try:
             while True:
+                advanced = False
                 try:
-                    self.ingest()
+                    advanced = self.ingest()
                     self.source_error = None
                 except (OSError, ValueError, RuntimeError) as exc:
                     self.source_error = (
                         f"Источник недоступен или изменился ({type(exc).__name__}). "
                         "Анализ приостановлен до восстановления источника."
                     )
-                if self.due(time.time()) and (task is None or task.done()):
-                    task = asyncio.create_task(self.assess())
+                if task is None or task.done():
+                    if self.live_due(time.time()):
+                        task = asyncio.create_task(self.assess(live=True))
+                    elif self.due(time.time()):
+                        task = asyncio.create_task(self.assess())
                 self.export()
-                await asyncio.sleep(5)
+                await asyncio.sleep(
+                    0 if self.bootstrap_target is None and advanced and not self.source_error else 5
+                )
         finally:
             if task:
                 task.cancel()

@@ -21,6 +21,11 @@ if TYPE_CHECKING:
     from codex_watchtower.report.workspace import ReportWorkspace
 
 
+class ReportSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    fast: bool
+
+
 class SessionSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     key: str = Field(pattern=r"^[a-f0-9]{24}$")
@@ -106,6 +111,18 @@ def create_report_app(engine: ReportEngine, *, workspace: ReportWorkspace | None
             raise HTTPException(404, "Session not found; refresh the search") from None
         except (OSError, ValueError, RuntimeError):
             raise HTTPException(409, "Cannot open session; current report is preserved") from None
+
+    @app.post("/settings")
+    async def settings(settings: ReportSettings, request: Request) -> JSONResponse:
+        if workspace is None:
+            raise HTTPException(404, "Report settings are unavailable")
+        origin = request.headers.get("origin")
+        if origin and origin != str(request.base_url).rstrip("/"):
+            raise HTTPException(403, "Cross-origin settings are forbidden")
+        try:
+            return JSONResponse(await asyncio.shield(workspace.set_fast(settings.fast)))
+        except OSError:
+            raise HTTPException(409, "Cannot save report settings") from None
 
     @app.get("/events")
     async def events(request: Request) -> StreamingResponse:

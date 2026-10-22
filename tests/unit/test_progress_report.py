@@ -246,7 +246,8 @@ async def test_analysis_evidence_and_cursors_survive_restart(engine):
     engine.ingest()
     engine.bootstrap_target = -1
     assert not engine.due(time.time())
-    assert engine.due(time.time() + 601)
+    assert not engine.due(time.time() + 601)
+    assert engine.live_due(time.time() + 601)
     packet, _, previous = engine.packet()
     assert previous.tasks[0].id == "report"
     assert any(e["id"] == ref for e in json.loads(packet)["previous_evidence"])
@@ -262,18 +263,18 @@ async def test_failure_keeps_previous_and_retries_later(engine, failure):
     engine.ingest()
     ref = json.loads(engine.packet()[0])["events"][0]["id"]
     engine.assessor = AsyncMock(return_value=report_for(ref))
-    await engine.assess()
+    await engine.assess(live=True)
     version = engine.snapshot()["version"]
     append(engine)
     engine.ingest()
     engine.assessor = AsyncMock(side_effect=failure)
-    await engine.assess()
+    await engine.assess(live=True)
     assert engine.snapshot()["version"] == version
     assert engine.snapshot()["error"]
     if isinstance(failure, RuntimeError):
         assert "вход" not in engine.snapshot()["error"]
-    assert not engine.due(time.time())
-    assert engine.due(time.time() + 601)
+    assert not engine.live_due(time.time())
+    assert engine.live_due(time.time() + 601)
 
 
 @pytest.mark.asyncio
@@ -450,12 +451,12 @@ async def test_restart_preserves_interval_even_with_new_events(engine):
     engine.ingest()
     ref = json.loads(engine.packet()[0])["events"][0]["id"]
     engine.assessor = AsyncMock(return_value=report_for(ref))
-    await engine.assess()
+    await engine.assess(live=True)
     append(engine)
     restarted = ReportEngine(engine.repo, engine.source, engine.output)
     restarted.ingest()
-    assert not restarted.due(time.time())
-    assert restarted.due(time.time() + 601)
+    assert not restarted.live_due(time.time())
+    assert restarted.live_due(time.time() + 601)
 
 
 def test_turn_completion_is_separate_from_process_completion(engine):
@@ -480,12 +481,12 @@ def test_turn_completion_is_separate_from_process_completion(engine):
 def test_initial_history_is_read_in_batches_without_losing_catchup_boundary(tmp_path):
     source = tmp_path / "rollout.jsonl"
     content = FIXTURE.read_text()
-    source.write_text(content + (content.splitlines()[-1] + "\n") * 450)
+    source.write_text(content + (content.splitlines()[-1] + "\n") * 4500)
     conn = open_database(tmp_path / "state.sqlite")
     try:
         engine = ReportEngine(Repository(conn), source, tmp_path / "report.html")
         engine.ingest()
-        assert len(engine.repo.get_events_since(engine.session_id, None)) < 220
+        assert len(engine.repo.get_events_since(engine.session_id, None)) < 2020
         assert not engine.snapshot()["coverage"]["initial_history_fully_read"]
         original_end = engine.repo.get_progress_source(engine.session_id)["bootstrap_bytes"]
         reopened = ReportEngine(engine.repo, engine.source, engine.output)
@@ -495,6 +496,104 @@ def test_initial_history_is_read_in_batches_without_losing_catchup_boundary(tmp_
         )
         reopened.ingest()
         assert reopened.snapshot()["coverage"]["initial_history_fully_read"]
-        assert len(reopened.repo.get_events_since(engine.session_id, None)) == 462
+        assert len(reopened.repo.get_events_since(engine.session_id, None)) == 4512
     finally:
         conn.close()
+
+
+@pytest.mark.asyncio
+async def test_live_window_prioritizes_tail_without_advancing_full_history(engine):
+    engine.ingest()
+    rows = engine.repo.progress_events(engine.session_id, -1)
+    engine.repo.save_progress(
+        engine.session_id,
+        rows[0]["event_sequence"],
+        "2026-10-22T08:00:00Z",
+        report_for(rows[0]["logical_event_id"]).model_dump_json(),
+    )
+    engine.assessor = AsyncMock(
+        side_effect=lambda packet, model: report_for(json.loads(packet)["events"][-1]["id"])
+    )
+    assert engine.live_due(time.time())
+    packet, cursor, _ = engine.packet(live=True)
+    data = json.loads(packet)
+    assert data["coverage"]["mode"] == "recent"
+    assert data["coverage"]["window_minutes"] == 5
+    assert cursor == rows[-1]["event_sequence"]
+    assert data["events"][0]["timestamp"] >= data["coverage"]["window_start"]
+    await engine.assess(live=True)
+    snapshot = engine.snapshot()
+    assert snapshot["report_mode"] == "recent"
+    assert snapshot["report_is_current"]
+    assert snapshot["coverage"]["analyzed_sequence"] == rows[0]["event_sequence"]
+    assert not engine.live_due(time.time())
+    restored = ReportEngine(engine.repo, engine.source, engine.output)
+    assert restored.snapshot()["report_mode"] == "recent"
+    assert (
+        restored.repo.latest_progress(engine.session_id)["event_cursor"]
+        == rows[0]["event_sequence"]
+    )
+    append(engine)
+    engine.ingest()
+    assert engine.snapshot()["report_is_current"]  # continuous tools do not hide a fresh report
+    assert engine.live_due(time.time() + 301)
+
+
+@pytest.mark.asyncio
+async def test_live_timeout_preserves_report_and_full_history_cursor(engine, monkeypatch):
+    import codex_watchtower.report.engine as module
+
+    engine.ingest()
+    ref = engine.repo.progress_events(engine.session_id, -1)[-1]["logical_event_id"]
+    engine.assessor = AsyncMock(return_value=report_for(ref))
+    await engine.assess(live=True)
+    version = engine.snapshot()["version"]
+    monkeypatch.setattr(module, "LIVE_TIMEOUT", 0.02)
+
+    async def hung(packet, model):
+        await asyncio.sleep(60)
+
+    engine.assessor = hung
+    await asyncio.wait_for(engine.assess(live=True), 0.3)
+    assert engine.snapshot()["version"] == version
+    assert "время" in engine.snapshot()["error"]
+    assert engine.repo.latest_progress(engine.session_id) is None
+
+
+def test_recent_packet_keeps_newest_events_and_reports_omissions(engine):
+    engine.ingest()
+    for i in range(100):
+        append(engine, str(i) + "x" * 4000)
+    engine.ingest()
+    packet, cursor, _ = engine.packet(live=True)
+    data = json.loads(packet)
+    assert len(packet) <= PACKET_BUDGET
+    assert data["coverage"]["omitted_events"] > 0
+    assert cursor == engine.repo.max_event_sequence(engine.session_id)
+    assert data["events"][-1]["summary"].startswith("99x")
+    assert all(e["timestamp"] >= data["coverage"]["window_start"] for e in data["events"])
+
+
+@pytest.mark.asyncio
+async def test_full_history_runs_once_then_only_recent_window(engine):
+    engine.ingest()
+    ref = engine.repo.progress_events(engine.session_id, -1)[-1]["logical_event_id"]
+    engine.assessor = AsyncMock(return_value=report_for(ref))
+    await engine.assess()
+    assert engine.snapshot()["coverage"]["history_complete"]
+    append(engine)
+    engine.ingest()
+    assert not engine.due(time.time() + 10000)
+    assert engine.live_due(time.time() + 10000)
+
+
+def test_partial_initial_line_does_not_spin_ingestion(engine):
+    append(engine, terminated=False)
+    engine.repo.connection.execute(
+        "UPDATE progress_sources SET bootstrap_bytes=? WHERE session_id=?",
+        (engine.source.stat().st_size, engine.session_id),
+    )
+    assert engine.ingest()
+    assert engine.bootstrap_target is None
+    assert not engine.due(time.time())
+    assert not engine.ingest()

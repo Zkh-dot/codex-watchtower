@@ -190,6 +190,28 @@
       opacity: 0.6;
       cursor: wait;
     }
+    .report-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 8px;
+    }
+    .report-controls input {
+      min-height: auto;
+      flex: none;
+      accent-color: var(--accent);
+    }
+    .activity-row {
+      display: flex;
+      gap: 8px;
+      padding: 3px 0;
+      overflow-wrap: anywhere;
+    }
+    .activity-row time {
+      flex: none;
+      color: var(--muted);
+      font-size: 12px;
+    }
     #session-results {
       max-height: 340px;
       overflow: auto;
@@ -321,6 +343,12 @@
       >
       <div id="session-results" hidden></div>
     </section>
+    <div id="report-controls" class="report-controls" hidden>
+      <label><input id="fast-mode" type="checkbox" /> Fast</label>
+      <small id="report-settings-status" role="status"
+        >Окно 5 минут · обновление до 60 секунд</small
+      >
+    </div>
   </header>
   <main id="app" aria-live="polite"></main>
   <noscript
@@ -670,6 +698,8 @@
       lastVersion = next.version;
       state = next;
       markSelectedSession();
+      const fast = document.getElementById("fast-mode");
+      if (fast && !fast.disabled) fast.checked = state.fast === true;
       const title = state.session_title || "Без названия";
       document.getElementById("session-heading").textContent = title;
       document.getElementById("session-id").textContent =
@@ -720,7 +750,15 @@
       if (resumed)
         line.append(el("span", "✓ Предыдущая цель завершена", "badge muted"));
       if (state.analyzing)
-        line.append(el("span", "◌ Анализ истории", "badge warning"));
+        line.append(
+          el(
+            "span",
+            state.analysis_mode === "recent"
+              ? "◌ Обновление · до 60 с"
+              : "◌ История в фоне",
+            "badge warning",
+          ),
+        );
       meta.append(line);
       const c = state.coverage;
       const current = state.report_is_current === true;
@@ -735,8 +773,17 @@
         );
       const total = c.latest_sequence === null ? 0 : c.latest_sequence + 1;
       const covered = Math.max(0, c.analyzed_sequence + 1);
-      if (!current) {
+      const info = cut("Сессия и покрытие", "session-info");
+      if (state.report_mode === "recent")
         meta.append(
+          el(
+            "small",
+            "Последние 5 минут работы · " + time(state.report_through_at),
+            "muted",
+          ),
+        );
+      if (!current || state.report_mode === "recent") {
+        info.append(
           el(
             "p",
             `◷ Архивный срез · разобрано ${covered.toLocaleString("ru-RU")} / ${total.toLocaleString("ru-RU")} событий`,
@@ -744,14 +791,23 @@
           ),
         );
         if (state.report_through_at)
-          meta.append(
+          info.append(
             el(
               "small",
               "Отчёт по событиям до " + time(state.report_through_at),
             ),
           );
       }
-      const info = cut("Сессия и покрытие", "session-info");
+      if (state.window_coverage?.omitted_events)
+        info.append(
+          el(
+            "p",
+            `Окно сокращено: ${state.window_coverage.included_events} из ${state.window_coverage.available_events} событий`,
+            "warning",
+          ),
+        );
+      if (c.history_complete)
+        info.append(el("p", "✓ Первый полный проход завершён", "good"));
       info.append(el("p", state.session_id, "session"));
       info.append(
         el(
@@ -799,12 +855,53 @@
       for (const err of [state.error, state.export_error])
         if (err) meta.append(el("p", err, "error"));
       root.append(meta);
+      if (state.recent_events?.length) {
+        const activity =
+          state.report_mode === "recent"
+            ? cut("Последние действия из журнала", "recent-activity")
+            : card("Сейчас · наблюдения из журнала");
+        activity.className = "card full";
+        for (const event of state.recent_events) {
+          const row = el("div", undefined, "activity-row");
+          row.append(
+            el(
+              "time",
+              new Date(event.timestamp).toLocaleTimeString("ru-RU", {
+                hour: "2-digit",
+                minute: "2-digit",
+              }),
+            ),
+          );
+          const detail = cut(
+            event.summary.slice(0, 160) +
+              (event.summary.length > 160 ? "…" : ""),
+            "recent-" + event.timestamp + event.kind,
+          );
+          detail.append(el("p", event.summary, "muted"));
+          row.append(detail);
+          activity.append(row);
+        }
+        root.append(activity);
+      }
       const r = state.report;
       if (!r) {
         const waiting = card("◌ Готовится первый отчёт");
         waiting.classList.add("full");
         root.append(waiting);
       } else {
+        const reportRoot =
+          !current &&
+          state.recent_events?.length &&
+          state.report_mode !== "recent"
+            ? cut(
+                "Предыдущий отчёт · " + time(state.report_through_at),
+                "previous-report",
+              )
+            : root;
+        if (reportRoot !== root) {
+          reportRoot.className = "card full";
+          root.append(reportRoot);
+        }
         const summary = card(current ? "Задание" : "Задание архивного среза");
         summary.classList.add("full");
         summary.append(el("strong", r.goal));
@@ -822,10 +919,11 @@
           summary.append(action);
         }
         const overview = cut("Сводка", "overview");
-        overview.append(el("p", r.summary.text));
+        if (current) summary.append(el("p", r.summary.text));
+        else overview.append(el("p", r.summary.text));
         evidence(overview, r.summary.refs, "summary");
         summary.append(overview);
-        root.append(summary);
+        reportRoot.append(summary);
         if (closed) {
           const history = cut(
             "История оценок · события до " + time(state.report_through_at),
@@ -842,7 +940,7 @@
             ),
             historyCard(),
           );
-          root.append(history);
+          reportRoot.append(history);
         } else {
           const assessment = el("div", undefined, "grid full");
           assessment.append(progressCard(r), historyCard());
@@ -853,8 +951,8 @@
             );
             archive.className = "card full";
             archive.append(assessment);
-            root.append(archive);
-          } else root.append(assessment);
+            reportRoot.append(archive);
+          } else reportRoot.append(assessment);
         }
         const tasks = tasksCard(r);
         if (!current || closed) {
@@ -864,8 +962,8 @@
           );
           archive.className = "card full";
           archive.append(tasks);
-          root.append(archive);
-        } else root.append(tasks);
+          reportRoot.append(archive);
+        } else reportRoot.append(tasks);
         const facts = cut(
           `Подробности · ✓ ${r.done.length} · ○ ${r.remaining.length}`,
           "facts",
@@ -880,14 +978,14 @@
             r.current_action ? [r.current_action] : [],
           );
         facts.append(el("p", r.uncertainty, "muted"));
-        root.append(facts);
+        reportRoot.append(facts);
         if (r.blockers.length) {
           const blockers = card(
             current ? "! Блокеры" : "! Блокеры архивного среза",
           );
           blockers.classList.add("full");
           claims(blockers, "", r.blockers);
-          if (current && !closed) root.append(blockers);
+          if (current && !closed) reportRoot.append(blockers);
           else facts.append(blockers);
         }
       }
@@ -912,7 +1010,10 @@
     render(initial);
     setInterval(freshness, 30000);
     if (location.protocol === "http:" || location.protocol === "https:") {
-      if (initial.session_picker) setupSessionPicker();
+      if (initial.session_picker) {
+        setupSessionPicker();
+        setupReportSettings();
+      }
       const stream = new EventSource("events");
       stream.onopen = () => {
         connection.textContent = "● Подключено";
@@ -930,6 +1031,32 @@
           connection.className = "badge error";
         }
       };
+    }
+    function setupReportSettings() {
+      const controls = document.getElementById("report-controls"),
+        fast = document.getElementById("fast-mode"),
+        status = document.getElementById("report-settings-status");
+      controls.hidden = false;
+      fast.addEventListener("change", async () => {
+        const requested = fast.checked;
+        fast.disabled = true;
+        status.textContent = "Сохранение…";
+        try {
+          const response = await fetch("settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fast: requested }),
+          });
+          if (!response.ok) throw new Error();
+          render(await response.json());
+          status.textContent = "Сохранено · применяется со следующего разбора";
+        } catch {
+          status.textContent = "Не удалось сохранить настройку";
+        } finally {
+          fast.disabled = false;
+          fast.checked = state.fast === true;
+        }
+      });
     }
     function markSelectedSession() {
       for (const button of document.getElementById("session-results").children)

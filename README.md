@@ -159,11 +159,20 @@ Selecting one switches the report in all connected tabs without reloading. Each
 session keeps its own checkpoint and report; only the selected session is analyzed.
 An already open report remains available after its session ages out of search.
 
-The first analysis starts immediately. Initial history is folded in bounded batches;
-a partial report shows its coverage. After initial catch-up, analysis runs every
-300–600 seconds (default 300), only when new events exist. One analysis runs at a
-time. Failures preserve the previous report and wait an interval before retrying.
-State, task IDs and timing survive restarts.
+The first history pass runs once in bounded batches, with its own saved checkpoint.
+A separate report of the last **five minutes of session activity** takes priority,
+so live work never waits for that history pass to finish. Later updates use only
+this window plus the previous summary and current user request. An oversized window
+keeps its newest events and explicitly reports omissions. Latest session messages
+appear immediately while an older report remains collapsed.
+
+Analysis runs every 300–600 seconds (default 300), only when new events exist.
+Each call has a **60-second deadline**, including CLI startup; the first full pass
+can take longer in total. One model call runs at a time. Failures preserve the
+previous report and wait an interval before retrying. State and task IDs survive
+restarts. The header's **Fast** checkbox sets Codex `service_tier="fast"` for the
+next call without changing the model or reasoning. This setting is shared across
+tabs and saved in `state_dir/progress/report-settings.json`.
 
 The default model is `gpt-6-luna` with medium reasoning; `--model` overrides its ID.
 This uses Codex's saved authentication and **may send redacted log excerpts to the

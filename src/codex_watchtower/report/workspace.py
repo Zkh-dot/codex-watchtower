@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import hashlib
+import json
+import os
 import sqlite3
+import tempfile
 import time
 from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
@@ -56,6 +59,13 @@ class ReportWorkspace:
         ):
             raise ValueError("output must be outside the state directory and config")
         state.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.settings_path = state / "report-settings.json"
+        self.fast = False
+        if self.settings_path.exists():
+            settings = json.loads(self.settings_path.read_text())
+            if not isinstance(settings, dict) or type(settings.get("fast")) is not bool:
+                raise ValueError("invalid report settings")
+            self.fast = settings["fast"]
         self.engine, self.resources = self._open(self.initial_source)
         self.revision = 0
         self.task: asyncio.Task[None] | None = None
@@ -83,7 +93,12 @@ class ReportWorkspace:
             conn = open_database(self.state / f"{name}.sqlite3")
             resources.callback(conn.close)
             engine = ReportEngine(
-                Repository(conn), source, self.output, interval=self.interval, model=self.model
+                Repository(conn),
+                source,
+                self.output,
+                interval=self.interval,
+                model=self.model,
+                fast=self.fast,
             )
             return engine, resources
         except BaseException:
@@ -200,6 +215,22 @@ class ReportWorkspace:
             engine.export()
             if self.running:
                 self.task = asyncio.create_task(engine.watch())
+            return self.snapshot()
+
+    async def set_fast(self, fast: bool) -> dict[str, Any]:
+        async with self.switch_lock:
+            fd, temporary = tempfile.mkstemp(prefix=".settings-", dir=self.state)
+            try:
+                with os.fdopen(fd, "w") as stream:
+                    json.dump({"fast": fast}, stream)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, self.settings_path)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+            self.fast = self.engine.fast = fast
+            self.engine.export()
             return self.snapshot()
 
     def snapshot(self) -> dict[str, Any]:

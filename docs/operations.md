@@ -168,6 +168,20 @@ arbitrary paths and foreign origins are rejected. Selection cancels the previous
 analysis before starting the next and restores each source's saved state. Selection
 is shared by all tabs. Aging out of search does not close the current report.
 
+`POST /settings` accepts a strict `{"fast": true|false}` JSON object and rejects
+foreign origins. The header checkbox saves this shared setting atomically in
+`state_dir/progress/report-settings.json`; it applies to the next model call.
+Fast passes `service_tier="fast"`, without changing the model or reasoning.
+
+The operational report uses the last five minutes ending at the latest session
+event, even for an idle session. Its cursor and errors are separate from the first
+full history pass. The scheduler prioritizes operational updates every configured
+interval, then resumes history batches; after that full pass completes, it runs
+only window updates. Each call is cancelled after 60 seconds including CLI startup,
+and its process group is killed. A full pass may take many batches. Window omissions
+are explicit in `window_coverage` and the coverage disclosure. Recent journal
+messages remain visible immediately; historical model output cannot block them.
+
 Ingestion reads at most 200 records per tick so initial history does not block the
 HTTP server. Initial catch-up coverage is explicitly marked until the startup file
 boundary has been read and analyzed.

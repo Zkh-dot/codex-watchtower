@@ -215,3 +215,34 @@ async def test_search_and_selection_api_reject_paths_and_foreign_origins(workspa
         assert response.json()["session_id"] == "b"
         assert (await client.get("/report.json")).json()["selection_revision"] == 1
         assert "session-picker" in (await client.get("/")).text
+
+
+@pytest.mark.asyncio
+async def test_fast_setting_is_validated_shared_and_persistent(workspace):
+    app = create_report_app(workspace.engine, workspace=workspace)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
+        assert not (await client.get("/report.json")).json()["fast"]
+        assert (await client.post("/settings", json={"fast": "true"})).status_code == 422
+        assert (
+            await client.post(
+                "/settings", json={"fast": True}, headers={"Origin": "https://bad.invalid"}
+            )
+        ).status_code == 403
+        assert (await client.post("/settings", json={"fast": True})).json()["fast"] is True
+        assert workspace.engine.fast
+        rows = await workspace.search("API")
+        assert (await workspace.select(rows[0]["key"]))["fast"] is True
+        other = ReportWorkspace(
+            workspace.initial_source,
+            workspace.root,
+            workspace.state,
+            workspace.output,
+            interval=300,
+            model="offline",
+        )
+        try:
+            assert other.engine.fast
+        finally:
+            other.close()

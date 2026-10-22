@@ -18,7 +18,8 @@ from codex_watchtower.report.contract import ProgressReport
     os.environ.get("WATCHTOWER_PROBE_CODEX") != "1",
     reason="requires installed Codex and permission to bind a loopback socket",
 )
-def test_installed_cli_sends_no_tools(tmp_path):
+@pytest.mark.parametrize("fast", [False, True])
+def test_installed_cli_sends_no_tools(tmp_path, fast):
     captured = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -44,7 +45,7 @@ def test_installed_cli_sends_no_tools(tmp_path):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        command = build_command(tmp_path, "gpt-6-luna")
+        command = build_command(tmp_path, "gpt-6-luna", fast=fast)
         overrides = [
             'model_provider="probe"',
             'model_providers.probe.name="probe"',
@@ -63,6 +64,10 @@ def test_installed_cli_sends_no_tools(tmp_path):
         )
         assert captured, result.stderr
         assert all(not body.get("tools") for body in captured)
+        if fast:
+            assert all(body.get("service_tier") == "priority" for body in captured)
+        else:
+            assert all(body.get("service_tier") != "priority" for body in captured)
         assert "unrecognized configuration" not in result.stdout
     finally:
         server.shutdown()

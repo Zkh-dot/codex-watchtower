@@ -1155,9 +1155,10 @@ class Repository:
             )
         )
 
-    def latest_progress(self, session_id: str) -> sqlite3.Row | None:
+    def latest_progress(self, session_id: str, *, live: bool = False) -> sqlite3.Row | None:
         row: sqlite3.Row | None = self._conn.execute(
-            "SELECT * FROM progress_reports WHERE session_id=? ORDER BY version DESC LIMIT 1",
+            f"SELECT * FROM {'progress_live_reports' if live else 'progress_reports'} "
+            "WHERE session_id=? ORDER BY version DESC LIMIT 1",
             (session_id,),
         ).fetchone()
         return row
