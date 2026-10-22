@@ -40,6 +40,21 @@ An earlier pilot produced an invalid reference mixing a sequence number with eve
 IDs. Application validation rejected it. The provider-facing schema was then narrowed
 to the exact allowed event IDs; the subsequent pilot passed.
 
+## Real-journal local ingestion check
+
+A user-selected real journal was read locally without invoking a model or
+transmitting its contents. Initial ingestion of 250,997,114 bytes took 101.08
+seconds in 434 batches of at most 200 records. The resulting state contained
+50,189 normalized events, one malformed record, 605 unknown events and 8,255
+truncated excerpts. These gaps remain visible in coverage rather than silently
+becoming evidence of completion.
+
+Closing and reopening the database, then reading the source again, preserved
+the coverage counts without duplicates. HTML export succeeded. The report version
+remained zero with no model assessment, as expected. This verifies local ingestion,
+checkpoint recovery and export on a large real journal; model quality, HTTP/SSE
+behavior on that journal and visual acceptance remain unverified.
+
 ## Pending acceptance
 
 - [ ] Analyze a specifically authorized real session and inspect the generated
