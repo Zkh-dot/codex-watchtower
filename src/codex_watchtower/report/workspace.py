@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import hashlib
-import json
 import sqlite3
 import time
 from contextlib import ExitStack
@@ -13,7 +12,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from codex_watchtower.codex.discovery import discover_sessions, is_user_session, read_session_meta
+from codex_watchtower.codex.discovery import (
+    discover_sessions,
+    is_user_session,
+    read_session_meta,
+    session_title,
+)
 from codex_watchtower.privacy.redact import redact_text
 from codex_watchtower.report.engine import ReportEngine
 from codex_watchtower.storage.db import open_database
@@ -27,30 +31,6 @@ def recent_session(started_at: str) -> bool:
         return now - timedelta(days=7) <= started <= now
     except (ValueError, TypeError):
         return False
-
-
-def session_title(path: Path) -> str:
-    with path.open(encoding="utf-8", errors="replace") as stream:
-        remaining = 256_000
-        for _ in range(100):
-            line = stream.readline(min(remaining, 64_000))
-            remaining -= len(line)
-            if not line or remaining <= 0 or not line.endswith("\n"):
-                break
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            p = record.get("payload", {}) if isinstance(record, dict) else {}
-            if not isinstance(p, dict) or p.get("role") != "user":
-                continue
-            content = p.get("content", [])
-            if not isinstance(content, list):
-                continue
-            text = " ".join(str(c.get("text", "")) for c in content if isinstance(c, dict))
-            if text and not text.startswith(("# AGENTS", "<environment_context>", "<skill>")):
-                return redact_text(text).text.replace("\n", " ")[:100]
-    return "без названия"
 
 
 class ReportWorkspace:
@@ -85,6 +65,11 @@ class ReportWorkspace:
         self.catalog_at = 0.0
         self.catalog_lock = asyncio.Lock()
         self.titles: dict[str, str] = {}
+        try:
+            self.catalog = self._scan()
+        except BaseException:
+            self.resources.close()
+            raise
 
     def _open(self, source: Path) -> tuple[ReportEngine, ExitStack]:
         resources = ExitStack()
@@ -223,8 +208,8 @@ class ReportWorkspace:
             **self.engine.snapshot(),
             "selection_revision": self.revision,
             "session_picker": True,
-            "session_title": selected.get("title", ""),
-            "session_workspace": selected.get("workspace", ""),
+            "session_title": selected.get("title", self.engine.session_title),
+            "session_workspace": selected.get("workspace", self.engine.session_workspace),
         }
 
     async def watch(self) -> None:

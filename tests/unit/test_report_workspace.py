@@ -99,6 +99,8 @@ async def test_search_excludes_old_sessions_even_when_catalog_is_cached(workspac
 
 @pytest.mark.asyncio
 async def test_search_by_folder_id_and_title_and_saved_report_round_trip(workspace):
+    assert workspace.snapshot()["session_title"] == "Расчёт колоды"
+    assert workspace.snapshot()["session_workspace"] == "/home/user/mtg"
     assert [r["session_id"] for r in await workspace.search("mtg")] == ["a"]
     assert [r["session_id"] for r in await workspace.search("колОДы")] == ["a"]
     assert [r["session_id"] for r in await workspace.search("demo API")] == ["b"]
@@ -112,6 +114,8 @@ async def test_search_by_folder_id_and_title_and_saved_report_round_trip(workspa
     assert workspace.snapshot()["version"] == 1
     selected = await workspace.select(keys["b"])
     assert selected["session_id"] == "b" and selected["version"] == 0
+    assert selected["session_title"] == "Починить API"
+    assert selected["session_workspace"] == "/home/user/demo"
     assert selected["selection_revision"] == 1
     assert (await workspace.select(keys["b"]))["selection_revision"] == 1
     restored = await workspace.select(keys["a"])

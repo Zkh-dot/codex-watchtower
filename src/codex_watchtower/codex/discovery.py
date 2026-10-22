@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from codex_watchtower.privacy.redact import redact_text
+
 
 @dataclass(frozen=True, slots=True)
 class DiscoveredSession:
@@ -107,3 +109,27 @@ def _inspect(path: Path) -> DiscoveredSession:
         metadata_complete=complete,
         user_session=is_user_session(meta),
     )
+
+
+def session_title(path: Path) -> str:
+    with path.open(encoding="utf-8", errors="replace") as stream:
+        remaining = 256_000
+        for _ in range(100):
+            line = stream.readline(min(remaining, 64_000))
+            remaining -= len(line)
+            if not line or remaining <= 0 or not line.endswith("\n"):
+                break
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            p = record.get("payload", {}) if isinstance(record, dict) else {}
+            if not isinstance(p, dict) or p.get("role") != "user":
+                continue
+            content = p.get("content", [])
+            if not isinstance(content, list):
+                continue
+            text = " ".join(str(c.get("text", "")) for c in content if isinstance(c, dict))
+            if text and not text.startswith(("# AGENTS", "<environment_context>", "<skill>")):
+                return redact_text(text).text.replace("\n", " ")[:100]
+    return "без названия"

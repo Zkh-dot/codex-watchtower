@@ -2,7 +2,7 @@
 <html lang="ru">
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Codex · Прогресс сессии</title>
+  <title>Codex Watchtower</title>
   <!-- Existing palette; 14/16/20px type, 8px rhythm, compact rows and native disclosures. -->
   <style>
     :root {
@@ -41,6 +41,13 @@
     h1 {
       font-size: 20px;
       margin: 4px 0 8px;
+      overflow-wrap: anywhere;
+    }
+    .session-identity {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 16px;
+      margin-bottom: 8px;
     }
     h2 {
       font-size: 16px;
@@ -273,13 +280,16 @@
   </style>
   <header>
     <div class="eyebrow">Codex Watchtower</div>
-    <h1>Прогресс сессии</h1>
+    <h1 id="session-heading"></h1>
+    <div class="session-identity session">
+      <span id="session-id"></span>
+      <span id="session-workspace"></span>
+    </div>
     <div class="statusline">
       <span id="connection" class="badge">Сохранённый снимок</span
       ><span id="freshness" class="badge"></span>
     </div>
     <section id="session-picker" hidden aria-label="Выбор сессии">
-      <small id="selected-session"></small>
       <form id="session-form" class="session-search">
         <label for="session-search">Сессия</label>
         <input
@@ -645,14 +655,13 @@
       previousSignature = signature;
       lastVersion = next.version;
       state = next;
-      const selectedSession = document.getElementById("selected-session");
-      if (selectedSession)
-        selectedSession.textContent = [
-          state.session_workspace,
-          state.session_title?.slice(0, 120),
-        ]
-          .filter(Boolean)
-          .join(" · ");
+      const title = state.session_title || "Без названия";
+      document.getElementById("session-heading").textContent = title;
+      document.getElementById("session-id").textContent =
+        "ID: " + state.session_id;
+      document.getElementById("session-workspace").textContent =
+        state.session_workspace || "Папка неизвестна";
+      document.title = title + " · " + state.session_id + " · Codex Watchtower";
       const opened = new Set(
           switched
             ? []
@@ -680,7 +689,6 @@
       );
       if (state.analyzing)
         line.append(el("span", "◌ Анализ истории", "badge warning"));
-      line.append(el("span", state.session_id.slice(0, 8), "session"));
       meta.append(line);
       const c = state.coverage;
       const current = state.report_is_current === true;

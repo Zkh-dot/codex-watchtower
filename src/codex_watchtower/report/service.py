@@ -10,11 +10,11 @@ from pathlib import Path
 
 import uvicorn
 
-from codex_watchtower.codex.discovery import discover_sessions
+from codex_watchtower.codex.discovery import discover_sessions, session_title
 from codex_watchtower.config import WatchtowerConfig
 from codex_watchtower.report.engine import ReportEngine
 from codex_watchtower.report.web import create_report_app
-from codex_watchtower.report.workspace import ReportWorkspace, session_title
+from codex_watchtower.report.workspace import ReportWorkspace
 from codex_watchtower.service import _load_config_or_none, resolve_config_path
 
 

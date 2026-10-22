@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from codex_watchtower.codex.discovery import read_session_meta
+from codex_watchtower.codex.discovery import read_session_meta, session_title
 from codex_watchtower.codex.goal import reported_goal
 from codex_watchtower.codex.normalize import normalize_record
 from codex_watchtower.codex.tailer import IdentityBroken, read_new_records, resolve_start
@@ -61,6 +61,8 @@ class ReportEngine:
         if not isinstance(session_id, str) or not session_id:
             raise ValueError("source must start with session_meta containing a session id")
         self.session_id = session_id
+        self.session_title = session_title(self.source)
+        self.session_workspace = redact_text(str(meta.get("cwd", ""))).text
         repo.upsert_session(
             session_id,
             workspace=str(meta.get("cwd", "")),
@@ -309,6 +311,8 @@ class ReportEngine:
         return {
             "version": latest["version"] if latest else 0,
             "session_id": self.session_id,
+            "session_title": self.session_title,
+            "session_workspace": self.session_workspace,
             "report": report,
             "reported_goal": goal,
             "report_through_at": analyzed["timestamp"] if analyzed else None,

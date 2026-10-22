@@ -96,6 +96,8 @@ def test_report_command_http_sse_export_and_shutdown(tmp_path, unused_tcp_port, 
             with httpx.Client(base_url=url, timeout=15, trust_env=False) as client:
                 deadline = time.monotonic() + 15
                 snapshot = client.get("/report.json").json()
+                assert snapshot["session_workspace"] == "/example/project"
+                assert snapshot["session_title"] != "без названия"
                 while snapshot["version"] == 0 and time.monotonic() < deadline:
                     time.sleep(0.05)
                     snapshot = client.get("/report.json").json()

@@ -19,6 +19,8 @@ def test_page_charts_updates_and_preserves_details_and_scroll():
     snapshot = {
         "version": 1,
         "session_id": "fixture",
+        "session_title": "Расчёт <колоды>",
+        "session_workspace": "/home/user/mtg",
         "report": report_for("e").model_dump(),
         "assessed_at": "2026-10-22T08:00:00Z",
         "last_event_at": "2026-10-22T08:00:00Z",
@@ -73,7 +75,8 @@ const elements={app:new Element('main'),connection:new Element('span'),
  freshness:new Element('span'),'initial-data':new Element('script')};
 elements['initial-data'].textContent=JSON.stringify(SNAPSHOT);
 for(const id of ['session-picker','session-form','session-search',
-                 'session-results','session-search-status'])
+                 'session-results','session-search-status',
+                 'session-heading','session-id','session-workspace'])
   elements[id]=new Element('div');
 global.document={getElementById:k=>elements[k],createElement:t=>new Element(t),
  createElementNS:(_,t)=>new Element(t)};
@@ -83,6 +86,9 @@ global.location={protocol:'file:'};global.setInterval=()=>{};
 """.replace("SNAPSHOT", json.dumps(snapshot, ensure_ascii=False))
     assertions = r"""
 assert.equal(app.querySelectorAll('svg').length,3);
+assert.equal(elements['session-heading'].textContent,initial.session_title);
+assert.equal(elements['session-id'].textContent,'ID: fixture');
+assert.equal(elements['session-workspace'].textContent,initial.session_workspace);
 function visibleText(n){return (n.textContent||'')+(n.tag==='details'&&!n.open
   ? n.children.filter(c=>c.tag==='summary'):n.children).map(visibleText).join(' ');}
 assert(!visibleText(app).includes(initial.report.tasks[0].comment));
@@ -121,6 +127,7 @@ completed.version=5;completed.reported_goal.status='active';render(completed);
 assert(visibleText(app).includes('60–74%')); // resumed goals regain their current estimate
 (async()=>{
  const selected=JSON.parse(JSON.stringify(initial));selected.session_id='another-session';
+ selected.session_title='Другая задача';selected.session_workspace='/home/user/demo';
  selected.selection_revision=1;selected.version=0;selected.report=null;
  const calls=[];
  global.fetch=async(url,options)=>{
@@ -142,6 +149,9 @@ assert(visibleText(app).includes('60–74%')); // resumed goals regain their cur
  assert.equal(calls[1][0],'session');
  assert.equal(JSON.parse(calls[1][1].body).key,'a'.repeat(24));
  assert.equal(state.session_id,'another-session');assert.equal(lastVersion,0);
+ assert.equal(elements['session-heading'].textContent,'Другая задача');
+ assert.equal(elements['session-id'].textContent,'ID: another-session');
+ assert.equal(elements['session-workspace'].textContent,'/home/user/demo');
  assert.equal(elements['session-results'].hidden,true);assert.equal(scrolls.at(-1),0);
  const currentRoot=app.children[0];
  const late=JSON.parse(JSON.stringify(initial));late.version=999;late.selection_revision=0;
